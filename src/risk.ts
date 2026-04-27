@@ -39,8 +39,8 @@ export class RiskManager {
     };
 
     logger.success(`Posición abierta: ${size.toFixed(6)} ${productId.split('-')[0]} @ $${entryPrice.toFixed(2)}`);
-    logger.info(`  Stop Loss: $${stopLoss.toFixed(2)} (-${config.stopLossPercent}%)`);
-    logger.info(`  Take Profit: $${takeProfit.toFixed(2)} (+${config.takeProfitPercent}%)`);
+    logger.info(`  Stop Loss: $${stopLoss.toFixed(2)} (-${config.trailingStopPct}%)`);
+    logger.info(`  Take Profit: $${takeProfit.toFixed(2)} (+${config.minProfitFees}%)`);
 
     return this.openPosition;
   }

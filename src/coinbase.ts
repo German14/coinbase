@@ -142,9 +142,34 @@ export class CoinbaseClient {
       averagePrice: parseFloat(o.average_filled_price || '0'),
     };
   }
-  async getCandles(productId: string): Promise<number[]> {
-  const path = `/api/v3/brokerage/products/${productId}/candles?start=${Math.floor(Date.now()/1000) - 3600}&end=${Math.floor(Date.now()/1000)}&granularity=ONE_MINUTE`;
-  const data = await this.request<any>('GET', path);
-  return data.candles.map((c: any) => parseFloat(c.close)).reverse();
+ async getCandles(productId: string): Promise<any[]> {
+  // Aumentamos el rango a 2 horas (7200 seg) para asegurar que siempre haya suficientes velas para el RSI (14 periodos)
+  const start = Math.floor(Date.now() / 1000) - 7200;
+  const end = Math.floor(Date.now() / 1000);
+  const path = `/api/v3/brokerage/products/${productId}/candles?start=${start}&end=${end}&granularity=ONE_MINUTE`;
+
+  try {
+    const data = await this.request<any>('GET', path);
+
+    if (!data || !data.candles || !Array.isArray(data.candles)) {
+      console.log(`⚠️ No se recibieron velas para ${productId}`);
+      return [];
+    }
+
+    // Retornamos un objeto mapeado correctamente
+    // Reverse es importante porque Coinbase las devuelve de la más nueva a la más antigua
+    return data.candles
+      .map((c: any) => ({
+        close: parseFloat(c.close || c.price || "0"),
+        high: parseFloat(c.high || "0"),
+        low: parseFloat(c.low || "0"),
+        open: parseFloat(c.open || "0")
+      }))
+      .filter((c:any) => c.close > 0) // Filtramos datos corruptos
+      .reverse();
+  } catch (error) {
+    console.error(`❌ Error en getCandles para ${productId}:`, error);
+    return [];
+  }
 }
 }

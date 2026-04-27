@@ -1,91 +1,78 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { config } from './config';
-import { logger } from './logger';
-import { Candle } from './coinbase';
 import Groq from "groq-sdk";
-import fetch, { Headers, Request, Response } from "node-fetch";
-import FormData from 'form-data';
-
-export interface SentimentResult {
-  signal: 'BUY' | 'SELL' | 'HOLD';
-  score: number;
-  confidence: number;
-  reasoning: string;
-  marketCondition: string;
-}
-// Pasamos el fetch directamente al constructor
-const groq = new Groq({
-  apiKey: config.groqApiKey,
-  fetch: fetch as any,
-});
-
-export async function analyzeSentiment(
-  pair: string,
-  candles: Candle[],
-  technicalScore: number,
-): Promise<SentimentResult> {
-  // ... (toda tu lógica de cálculo de precios, volumen y volatilidad se queda igual) ...
-  const recent = candles.slice(-20);
-  const currentPrice = recent[recent.length - 1].close;
-
-  const prompt = `Eres un analista experto de criptomonedas. Analiza estos datos:
-  Par: ${pair}
-  Precio actual: $${currentPrice.toFixed(2)}
-  Score Técnico: ${technicalScore}
-  (Analiza la tendencia y el volumen),Prioriza monedas que estén rompiendo resistencias con volumen creciente y tambien se lo más agresivo que puedas con las monedas
-
-  Responde ÚNICAMENTE con JSON válido, sin markdown ni texto extra:
-  {"signal":"BUY","score":75,"confidence":80,"marketCondition":"estable","reasoning":"explicación corta"}`;
-
-  try {
-    // LLAMADA A GROQ
-    const chatCompletion = await groq.chat.completions.create({
-
-      messages: [
-        {
-          role: "system",
-          content: "Eres un bot de trading de alta precisión. Solo respondes en formato JSON.",
-        },
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      model: "llama-3.1-8b-instant",
-      temperature: 0.1, // Baja temperatura para respuestas más consistentes
-    });
-
-    const responseContent = chatCompletion.choices[0]?.message?.content || "";
-
-    // Limpiamos la respuesta por si la IA añade markdown de bloque de código
-    const text = responseContent.trim().replace(/```json/g, '').replace(/```/g, '').trim();
-
-    return JSON.parse(text) as SentimentResult;
-  } catch (err) {
-    if (err instanceof Error) {
-      logger.warn(`Error Groq: ${err.message}`);
+import { config } from "./config";
+import { logger } from "./logger";
+const fetch = require("node-fetch"); // Importamos fetch manualmente
+if (!globalThis.fetch) {
+  (globalThis as any).fetch = fetch;
+  (globalThis as any).Headers = fetch.Headers;
+  (globalThis as any).Request = fetch.Request;
+  (globalThis as any).Response = fetch.Response;
+  if (!(globalThis as any).FormData) {
+        (globalThis as any).FormData = class FormData {};
     }
-    // Fallback: Si la IA falla, devolvemos un score neutral para que decidan los indicadores técnicos
-    return {
-      signal: 'HOLD',
-      score: 0,
-      confidence: 0,
-      reasoning: 'Error en Groq API.',
-      marketCondition: 'Desconocido'
-    };
-  }
 }
+export class SentimentAnalyzer {
+  private groq: Groq;
+  constructor() {
+    this.groq = new Groq({
+      apiKey: config.groqApiKey,
+      fetch: fetch, // <-- Se lo pasamos directamente aquí
+    });
+  }
 
-export function combineSignals(
-  technicalScore: number,
-  technicalConfidence: number,
-  sentimentScore: number,
-  sentimentConfidence: number,
-): { signal: 'BUY' | 'SELL' | 'HOLD'; finalScore: number; confidence: number } {
-  const weightedScore = technicalScore * 0.6 + sentimentScore * 0.4;
-  const weightedConfidence = technicalConfidence * 0.6 + sentimentConfidence * 0.4;
-  const signal: 'BUY' | 'SELL' | 'HOLD' =
-    weightedScore >= config.minSignalScore ? 'BUY' :
-    weightedScore <= -config.minSignalScore ? 'SELL' : 'HOLD';
-  return { signal, finalScore: weightedScore, confidence: weightedConfidence };
+  /**
+   * Analiza datos técnicos y devuelve un score numérico mediante IA
+   */
+  async analyzeWithGroq(
+    pair: string,
+    data: { rsi: number; price: number; trend: string },
+  ): Promise<number> {
+    try {
+      const prompt = `
+        Analiza como trader experto el par ${pair}:
+        - RSI: ${data.rsi.toFixed(2)}
+        - Precio: ${data.price}
+        - Tendencia: ${data.trend}
+
+        Responde ÚNICAMENTE con un número entero del 1 al 100.
+        - 80-100: Compra fuerte (RSI bajo, tendencia recuperando).
+        - 60-79: Compra moderada.
+        - 40-59: Neutral/Espera.
+        - 1-39: Venta (Sobrecarga, RSI muy alto > 70).
+
+        No incluyas texto, solo el número.
+      `;
+
+      const completion = await this.groq.chat.completions.create({
+        messages: [
+          {
+            role: "system",
+            content:
+              "Eres un bot de trading de alta precisión. Solo respondes con números.",
+          },
+          { role: "user", content: prompt },
+        ],
+        model: "llama-3.1-8b-instant", // El modelo más rápido de Groq
+        temperature: 0.1, // Casi sin aleatoriedad para ser consistente
+        max_tokens: 10, // No necesitamos más que un par de dígitos
+      });
+
+      const response = completion.choices[0]?.message?.content?.trim() || "50";
+
+      // Limpiamos la respuesta por si la IA devuelve algo de texto extra
+      const score = parseInt(response.replace(/\D/g, ""));
+
+      if (isNaN(score)) {
+        logger.warn(
+          `IA devolvió un valor no numérico para ${pair}, usando 50.`,
+        );
+        return 50;
+      }
+
+      return score;
+    } catch (error: any) {
+      logger.error(`Error en Groq para ${pair}: ${error.message}`);
+      return 50; // Retorno neutral por seguridad
+    }
+  }
 }
