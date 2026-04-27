@@ -197,6 +197,8 @@ export class TradingBot {
           (await this.coinbase.getPrice(holdingPair));
 
         this.logHoldingStatus(currentPrice);
+        // 1. Si no encontramos análisis del par actual, esperamos
+        if (!holdingAnalysis) return;
 
         // Comprobar stop loss / take profit
         const pnlPct =
@@ -231,7 +233,7 @@ export class TradingBot {
           .filter((a) => a.baseCurrency !== this.currentHolding)
           .sort((a, b) => b.finalScore - a.finalScore)[0];
 
-        const ROTATION_MARGIN = 5; // el alternativo debe superar al actual en 20 puntos
+        const ROTATION_MARGIN = 25; // el alternativo debe superar al actual en 20 puntos
         if (
           bestAlternative &&
           bestAlternative.finalScore >
@@ -384,12 +386,12 @@ export class TradingBot {
       );
 
       const pair = `${this.currentHolding}-USDC`;
-      await this.coinbase.marketSell(pair, amountToSell);
-      const pnl =
-        amountToSell - this.currentHoldingSize * this.currentHoldingEntryPrice;
+      const order = await this.coinbase.marketSell(pair, amountToSell);
+      const sellPrice = order.averagePrice || currentPrice;
+      const pnl = amountToSell - this.currentHoldingSize * sellPrice;
       const pnlPct =
         (pnl / (this.currentHoldingSize * this.currentHoldingEntryPrice)) * 100;
-      this.savePnLToHistory(pnl, pnl >= 0);
+      this.savePnLToHistory(pnlPct, pnlPct >= 0);
       this.currentHolding = null;
       this.currentHoldingSize = 0;
     } catch (err: any) {

@@ -129,6 +129,7 @@ export class CoinbaseClient {
     const data: any = await this.request('POST', '/api/v3/brokerage/orders', bodyMarket);
     if (!data.success && data.error_response?.message?.includes("limit order type")) throw new Error("LIMIT_ONLY");
     if (!data.success) throw new Error(data.error_response?.message);
+    await new Promise(r => setTimeout(r, 2000));
     return this.getOrderDetails(data.success_response.order_id, 'BUY');
   } catch (error: any) {
     if (error.message === "LIMIT_ONLY") {
@@ -140,7 +141,7 @@ export class CoinbaseClient {
         client_order_id: `${clientOrderId}-limit`,
         product_id: productId,
         side: 'BUY',
-        order_configuration: { limit_limit_gtc: { base_size: baseSize, limit_price: limitPrice.toFixed(8), post_only: false } }
+        order_configuration: { limit_limit_gtc: { base_size: baseSize, limit_price: limitPrice.toFixed(8), post_only: true } }
       };
       const dataLimit: any = await this.request('POST', '/api/v3/brokerage/orders', bodyLimit);
       return this.getOrderDetails(dataLimit.success_response.order_id, 'BUY');
@@ -162,6 +163,7 @@ async marketSell(productId: string, baseSize: number): Promise<OrderResult> {
   try {
     logger.trade(`Enviando orden SELL: ${baseSize} de ${productId}`);
     const data = await this.request<any>('POST', '/api/v3/brokerage/orders', bodyMarket);
+
 
     if (!data.success) {
       if (data.error_response?.message?.includes("limit only mode")) {
