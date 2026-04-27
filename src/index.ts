@@ -1,37 +1,61 @@
-import { TradingBot } from "./bot";
-import { config } from "./config";
-import { logger } from "./logger";
-import fetch, { Headers, Request, Response } from "node-fetch";
-import FormData from 'form-data';
-// Polyfill global para Node 16
-(global as any).fetch = fetch;
-(global as any).Headers = Headers;
-(global as any).Request = Request;
-(global as any).Response = Response;
-(globalThis as any).FormData = FormData;
-async function main() {
-  logger.info("🚀 Iniciando Coinbase Trading Bot...");
-  logger.info(`📊 Par de trading: ${config.tradingPairs}`);
-  logger.info(`💰 Capital por operación: $${config.tradeAmountUSD}`);
-  logger.info(`🤖 Estrategia: Indicadores Técnicos + IA Sentiment`);
+import { TradingBot } from './bot';
+import { logger } from './logger';
+import { config, validateConfig } from './config';
+import { CoinbaseClient } from './coinbase';
 
-  const bot = new TradingBot();
+async function start() {
+  logger.info('🚀 Iniciando Sistema de Trading Inteligente...');
+  try {
+    // Validamos antes de instanciar nada
+    validateConfig();
 
-  process.on("SIGINT", async () => {
-    logger.info("\n🛑 Deteniendo bot...");
-    await bot.stop();
-    process.exit(0);
-  });
+    // 1. Instanciar el bot
+    // Al instanciarlo fuera del bucle, permitimos que guarde variables como 'highestPrice'
+    const bot = new TradingBot();
+    const exchange = new CoinbaseClient();
+    const btcBalance = await exchange.getBalance('BTC'); // Opcional: ver también BTC
+    const realBalance = await exchange.getBalance('USDC');
 
-  process.on("SIGTERM", async () => {
-    await bot.stop();
-    process.exit(0);
-  });
+    logger.info(`⚙️ Configuración cargada:
+    - Umbral de Rotación: +${25} puntos
+    - Trailing Stop: ${3.5}%
+   - Capital Disponible: $${realBalance.toFixed(2)} USDC
+   - BTC en Cartera: ${btcBalance.toFixed(8)} BTC
+  `);
 
-  await bot.start();
+    // 2. Bucle de ejecución infinito
+    // Usamos un intervalo para que el bot analice el mercado periódicamente
+    const intervalMinutes: string = process.env.CHECK_INTERVAL_MS!;
+
+    const run = async () => {
+      try {
+        // Ejecuta un ciclo completo (Análisis -> Trailing Stop -> Compra/Venta)
+        await bot.runCycle();
+      } catch (error: any) {
+        logger.error(`❌ Error crítico en el ciclo de ejecución: ${error.message}`);
+      }
+
+      logger.info(`💤 Esperando ${intervalMinutes} MS para el siguiente ciclo...`);
+    };
+
+    // Ejecutar inmediatamente al arrancar
+    await run();
+
+    // Programar ejecuciones recurrentes
+    setInterval(run, +intervalMinutes);
+  }catch (error:any) {
+    console.error(error.message);
+    process.exit(1); // Detiene el bot si la config está mal
+  }
 }
 
-main().catch((err) => {
-  logger.error("Error fatal:", err);
-  process.exit(1);
+// Manejo de errores globales para evitar que el bot se detenga
+process.on('uncaughtException', (err) => {
+  logger.error(`🚨 Excepción no capturada: ${err.message}`);
 });
+
+process.on('unhandledRejection', (reason) => {
+  logger.error(`🚨 Promesa rechazada no manejada: ${reason}`);
+});
+
+start();

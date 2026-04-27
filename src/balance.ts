@@ -1,80 +1,117 @@
-import fetch, { Headers, Request, Response } from 'node-fetch';
-(global as any).fetch = fetch;
-(global as any).Headers = Headers;
-(global as any).Request = Request;
-(global as any).Response = Response;
-
 import { CoinbaseClient } from './coinbase';
-import { validateConfig } from './config';
-import chalk from 'chalk';
-import fs from 'fs'; // Necesario para leer el historial de ganancias
+import * as fs from 'fs';
+import { config } from './config';
 
-async function showBalance() {
-  validateConfig();
-  const client = new CoinbaseClient();
+const GREEN = '\x1b[32m';
+const RED = '\x1b[31m';
+const CYAN = '\x1b[36m';
+const YELLOW = '\x1b[33m';
+const RESET = '\x1b[0m';
+const BOLD = '\x1b[1m';
 
-  // 1. SECCIÓN DE PORTFOLIO (Tu código actual)
-  console.log(chalk.gray('\n' + '─'.repeat(50)));
-  console.log(chalk.bold.white('  💼 PORTFOLIO ACTUAL'));
-  console.log(chalk.gray('─'.repeat(50)));
-
-  const balances = await client.getBalances();
-  const active = balances.filter((b) => b.availableBalance + b.holdBalance > 0);
-
-  let totalUSD = 0;
-  if (active.length === 0) {
-    console.log(chalk.yellow('  Sin saldo en ninguna moneda.'));
-  } else {
-    for (const b of active) {
-      const total = b.availableBalance + b.holdBalance;
-      let usdValue = 0;
-      let priceStr = '';
-
-      if (['USD', 'USDC', 'USDT'].includes(b.currency)) {
-        usdValue = total;
-        priceStr = chalk.gray('(stable)');
-      } else {
-        try {
-          const price = await client.getPrice(`${b.currency}-USD`);
-          usdValue = total * price;
-          priceStr = chalk.gray(`@ $${price.toFixed(2)}`);
-        } catch { priceStr = chalk.gray('(sin precio)'); }
-      }
-      totalUSD += usdValue;
-      console.log(`  ${chalk.bold.cyan(b.currency.padEnd(8))} ${total.toFixed(6).padStart(18)} ${priceStr.padEnd(20)} = ${chalk.green(`$${usdValue.toFixed(2)}`)}`);
-    }
-    console.log(chalk.gray('─'.repeat(50)));
-    console.log(`  ${chalk.bold.white('TOTAL ESTIMADO'.padEnd(28))} ${chalk.bold.green('$' + totalUSD.toFixed(2))} USD`);
-  }
-
-  // 2. NUEVA SECCIÓN: MONITOR DE GANANCIAS (PnL)
-  console.log('\n' + chalk.gray('─'.repeat(50)));
-  console.log(chalk.bold.magenta('  📊 RENDIMIENTO DEL BOT (PnL)'));
-  console.log(chalk.gray('─'.repeat(50)));
-
-  try {
-    // Intentamos leer el archivo donde el bot guarda las ganancias
-    if (fs.existsSync('./pnl_history.json')) {
-      const pnlData = JSON.parse(fs.readFileSync('./pnl_history.json', 'utf-8'));
-
-      const winRate = ((pnlData.wins / (pnlData.wins + pnlData.losses)) * 100) || 0;
-      const colorPnL = pnlData.totalPnL >= 0 ? chalk.green : chalk.red;
-
-      console.log(`  ${chalk.white('Ganancia Total:'.padEnd(25))} ${colorPnL('$' + pnlData.totalPnL.toFixed(2))}`);
-      console.log(`  ${chalk.white('Operaciones Ganadas:'.padEnd(25))} ${chalk.green(pnlData.wins)}`);
-      console.log(`  ${chalk.white('Operaciones Perdidas:'.padEnd(25))} ${chalk.red(pnlData.losses)}`);
-      console.log(`  ${chalk.white('Ratio de Acierto:'.padEnd(25))} ${chalk.cyan(winRate.toFixed(2) + '%')}`);
-    } else {
-      console.log(chalk.gray('  No hay historial de trading todavía.'));
-    }
-  } catch (err) {
-    console.log(chalk.red('  Error al cargar datos de PnL.'));
-  }
-
-  console.log(chalk.gray('─'.repeat(50) + '\n'));
+interface HistoryEntry {
+  date: string;
+  totalValue: number;
 }
 
-showBalance().catch((err) => {
-  console.error(chalk.red('Error:'), err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+export class BalanceManager {
+  private client: CoinbaseClient;
+  private readonly DUST_THRESHOLD = 0.01;
+  private readonly historyFile = './history.json';
+
+  constructor(client: CoinbaseClient) {
+    this.client = client;
+  }
+
+  private saveToHistory(totalValue: number): HistoryEntry[] {
+    let history: HistoryEntry[] = [];
+    try {
+      if (fs.existsSync(this.historyFile)) {
+        history = JSON.parse(fs.readFileSync(this.historyFile, 'utf-8'));
+      }
+    } catch (e) {
+      history = [];
+    }
+    const today = new Date().toISOString().split('T')[0];
+    const existingIndex = history.findIndex(e => e.date === today);
+    if (existingIndex !== -1) {
+      history[existingIndex].totalValue = totalValue;
+    } else {
+      history.push({ date: today, totalValue });
+    }
+    if (history.length > 30) history.shift();
+    fs.writeFileSync(this.historyFile, JSON.stringify(history, null, 2));
+    return history;
+  }
+
+  async printReport() {
+    try {
+      const rawBalances = await this.client.getBalances();
+      let totalValue = 0;
+      // Usamos el capital inicial del .env
+      const initialInv = parseFloat(process.env.INITIAL_INVESTMENT || '25.00');
+
+      console.log(`\n${BOLD}${CYAN}==========================================${RESET}`);
+      console.log(`${BOLD}${CYAN}    📊 PERFORMANCE & TRADING REPORT       ${RESET}`);
+      console.log(`${BOLD}${CYAN}==========================================${RESET}\n`);
+
+      for (const account of rawBalances) {
+        if (account.availableBalance <= 0) continue;
+        let valueInUSDC = 0;
+
+        if (account.currency === 'USDC' || account.currency === 'USD') {
+          valueInUSDC = account.availableBalance;
+        } else {
+          try {
+            const price = await this.client.getPrice(`${account.currency}-USDC`);
+            valueInUSDC = account.availableBalance * price;
+          } catch (e) { valueInUSDC = 0; }
+        }
+
+        if (valueInUSDC > this.DUST_THRESHOLD) {
+          totalValue += valueInUSDC;
+          console.log(
+            `${GREEN}  ✔ ${account.currency.padEnd(6)}${RESET} | ` +
+            `Cant: ${YELLOW}${account.availableBalance.toFixed(4).padEnd(10)}${RESET} | ` +
+            `Valor: ${GREEN}$${valueInUSDC.toFixed(2)}${RESET} USDC`
+          );
+        }
+      }
+
+      const history = this.saveToHistory(totalValue);
+      const lastWeekEntry = history.length >= 7 ? history[history.length - 7] : history[0];
+
+      const totalProfit = totalValue - initialInv;
+
+      // --- CÁLCULO DE EFICIENCIA ---
+      // La eficiencia es el ratio de beneficio respecto a la inversión inicial
+      // Un 100% significa que has duplicado el capital.
+      // Un 0% significa que estás en el punto de equilibrio (break-even).
+      const efficiency = (totalProfit / initialInv) * 100;
+      const effColor = efficiency >= 0 ? GREEN : RED;
+
+      console.log(`\n${BOLD}${CYAN}------------------------------------------${RESET}`);
+      console.log(`${BOLD}  VALOR ACTUAL:       ${GREEN}$${totalValue.toFixed(2)} USDC${RESET}`);
+      console.log(`${BOLD}  INVERSIÓN INICIAL:  ${YELLOW}$${initialInv.toFixed(2)} USDC${RESET}`);
+
+      console.log(`\n${BOLD}  EFICIENCIA DEL BOT: ${effColor}${efficiency.toFixed(2)}% ${efficiency >= 0 ? '🚀' : '📉'}${RESET}`);
+
+      console.log(`${BOLD}  HISTÓRICO TOTAL:    ${totalProfit >= 0 ? GREEN : RED}${totalProfit >= 0 ? '+' : ''}$${totalProfit.toFixed(2)} USDC${RESET}`);
+      console.log(`${BOLD}${CYAN}------------------------------------------${RESET}\n`);
+
+    } catch (error: any) {
+      console.log(`${RED}❌ Error: ${error.message}${RESET}`);
+    }
+  }
+}
+
+async function run() {
+  try {
+    const client = new CoinbaseClient();
+    const manager = new BalanceManager(client);
+    await manager.printReport();
+    process.exit(0);
+  } catch (error) { process.exit(1); }
+}
+
+run();

@@ -1,449 +1,225 @@
-import { CoinbaseClient } from "./coinbase";
-import { analyzeTechnicals } from "./indicators";
-import { analyzeSentiment, combineSignals } from "./sentiment";
-import { RiskManager, TradeHistory } from "./risk";
-import { config, validateConfig } from "./config";
-import { logger } from "./logger";
-import fs from "fs"; // Necesario para leer el historial de ganancias
-interface PairAnalysis {
+import { CoinbaseClient } from './coinbase';
+import { config } from './config';
+import { logger } from './logger';
+
+interface Analysis {
   pair: string;
-  baseCurrency: string; // SOL, OP, BTC...
-  currentPrice: number;
   finalScore: number;
-  confidence: number;
-  signal: "BUY" | "SELL" | "HOLD";
-  technicalScore: number;
-  sentimentScore: number;
+  currentPrice: number;
 }
 
 export class TradingBot {
-  private coinbase: CoinbaseClient;
-  private riskManager: RiskManager;
-  private tradeHistory: TradeHistory;
-  private running = false;
-  private interval: ReturnType<typeof setTimeout> | null = null;
-  private currentTradeId: number | null = null;
-  private iterationCount = 0;
-
-  // Moneda que tenemos actualmente en cartera (distinta de USD/USDC)
+  private exchange: CoinbaseClient;
   private currentHolding: string | null = null;
-  private currentHoldingSize = 0;
-  private currentHoldingEntryPrice = 0;
+  private highestPrice: number = 0;
+  private buyPrice: number = 0;
+
+  // --- CONFIGURACIÓN DE ESTRATEGIA ---
+  private readonly ROTATION_THRESHOLD = 25;   // Diferencia de puntos para rotar
+  private readonly TRAILING_STOP_PCT = 3.5;    // % de caída desde el máximo para vender
+  private readonly MIN_PROFIT_TO_EXIT = 2.2;   // Profit mínimo para permitir trailing (comisiones)
+
+  // Lista de pares a vigilar
+  private readonly WATCHLIST = [
+    'BTC-USDC', 'ETH-USDC', 'SOL-USDC', 'ALEO-USDC',
+    'RAVE-USDC', 'SUI-USDC', 'PEPE-USDC', 'ADA-USDC'
+  ];
 
   constructor() {
-    this.coinbase = new CoinbaseClient();
-    this.riskManager = new RiskManager();
-    this.tradeHistory = new TradeHistory();
+    this.exchange = new CoinbaseClient();
   }
-  private savePnLToHistory(profit: number, wasWin: boolean): void {
-    const path = "./pnl_history.json";
-    let stats = { totalPnL: 0, wins: 0, losses: 0 };
+async getPortfolioValueInUSDC(): Promise<number> {
+  const balances = await this.exchange.getBalances();
+  let totalValue = 0;
 
-    if (require("fs").existsSync(path)) {
+  for (const account of balances) {
+    if (account.availableBalance <= 0) continue;
+
+    if (account.currency === 'USDC' || account.currency === 'USD') {
+      // El USDC ya es dólar, se suma directo
+      totalValue += account.availableBalance;
+    } else {
       try {
-        stats = JSON.parse(require("fs").readFileSync(path, "utf-8"));
+        // Para monedas como BTC, SOL, PEPE, buscamos su precio actual
+        const price = await this.exchange.getPrice(`${account.currency}-USDC`);
+        totalValue += account.availableBalance * price;
       } catch (e) {
-        /* archivo corrupto, usamos el default */
+        // Si no existe el par con USDC, ignoramos o logeamos
+        // logger.debug(`No se pudo valorar la moneda: ${account.currency}`);
       }
     }
-
-    stats.totalPnL += profit;
-    if (wasWin) stats.wins++;
-    else stats.losses++;
-
-    require("fs").writeFileSync(path, JSON.stringify(stats, null, 2));
   }
-  async start(): Promise<void> {
-    validateConfig();
-
-    logger.banner("🤖 COINBASE MULTI-ASSET TRADING BOT");
-    logger.info(`Pares vigilados: ${config.tradingPairs.join(" | ")}`);
-    logger.info(`Capital por operación: $${config.tradeAmountUSD}`);
-    logger.info(
-      `Stop Loss: ${config.stopLossPercent}% | Take Profit: ${config.takeProfitPercent}%`,
-    );
-    logger.divider();
-
-    // Detectar si ya tenemos alguna moneda en cartera
-    await this.detectCurrentHolding();
-
-    this.running = true;
-    await this.runCycle();
-
-    this.interval = setInterval(async () => {
-      if (this.running) await this.runCycle();
-    }, config.checkIntervalMs);
-
-    await new Promise<void>((resolve) => {
-      const check = setInterval(() => {
-        if (!this.running) {
-          clearInterval(check);
-          resolve();
-        }
-      }, 1000);
-    });
-  }
-
-  async stop(): Promise<void> {
-    this.running = false;
-    if (this.interval) clearInterval(this.interval);
-    this.tradeHistory.printSummary();
-    logger.info("Bot detenido.");
-  }
-
-  // Detecta si ya tenemos crypto en cartera al arrancar
-  private async detectCurrentHolding(): Promise<void> {
+  return totalValue;
+}
+  /**
+   * Ejecuta un ciclo completo de análisis y trading
+   */
+  async runCycle() {
     try {
-      const balances = await this.coinbase.getBalances();
-      const btcBal = balances.find((b) => b.currency === "BTC");
-      if (btcBal && btcBal.availableBalance > 0.0001) {
-        // Filtro por cantidad mínima de BTC
-        const price = await this.coinbase.getPrice("BTC-USDC");
-        const usdValue = btcBal.availableBalance * price;
-
-        this.currentHolding = "BTC";
-        this.currentHoldingSize = btcBal.availableBalance;
-        this.currentHoldingEntryPrice = price; // Toma el precio actual como entrada
-        logger.success(
-          `Holding de BTC vinculado: ${btcBal.availableBalance} BTC ≈ $${usdValue.toFixed(2)}`,
-        );
-      }
-      for (const pair of config.tradingPairs) {
-        const base = pair.split("-")[0];
-        const bal = balances.find((b) => b.currency === base);
-        if (bal && bal.availableBalance > 0) {
-          const price = await this.coinbase.getPrice(pair);
-          const usdValue = bal.availableBalance * price;
-          if (usdValue >= 1) {
-            // más de $1 en esa moneda
-            this.currentHolding = base;
-            this.currentHoldingSize = bal.availableBalance;
-            this.currentHoldingEntryPrice = price; // usamos precio actual como referencia
-            logger.success(
-              `Holding detectado al arrancar: ${bal.availableBalance.toFixed(6)} ${base} ≈ $${usdValue.toFixed(2)}`,
-            );
-          }
-        }
-      }
-      if (!this.currentHolding) {
-        logger.info("Sin holdings activos. Esperando señal de entrada.");
-      }
-    } catch (err) {
-      logger.warn(
-        "Error detectando BTC:",
-        err instanceof Error ? err.message : "",
-      );
-
-      logger.warn(
-        "No se pudo detectar holding inicial:",
-        err instanceof Error ? err.message : "",
-      );
-    }
-  }
-  // En bot.ts
-  private savePnL(profit: number, isWin: boolean) {
-    let data = { totalPnL: 0, wins: 0, losses: 0 };
-
-    if (fs.existsSync("./pnl_history.json")) {
-      data = JSON.parse(fs.readFileSync("./pnl_history.json", "utf-8"));
-    }
-
-    data.totalPnL += profit;
-    if (isWin) data.wins++;
-    else data.losses++;
-
-    fs.writeFileSync("./pnl_history.json", JSON.stringify(data, null, 2));
-  }
-  private async runCycle(): Promise<void> {
-    this.iterationCount++;
-    logger.banner(
-      `⏱ CICLO #${this.iterationCount} — ${new Date().toLocaleTimeString("es-ES")}`,
-    );
-
-    try {
-      // 1. Analizar todos los pares
-      const analyses: PairAnalysis[] = [];
-
-      for (const pair of config.tradingPairs) {
-        logger.info(`Analizando ${pair}...`);
-        try {
-          const analysis = await this.analyzePair(pair);
-          analyses.push(analysis);
-          logger.signal(
-            `${pair.padEnd(10)} score: ${analysis.finalScore.toFixed(1).padStart(7)} | ` +
-              `confianza: ${analysis.confidence.toFixed(0).padStart(3)}% | señal: ${analysis.signal}`,
-          );
-        } catch (err) {
-          logger.warn(
-            `Error analizando ${pair}:`,
-            err instanceof Error ? err.message : "",
-          );
-        }
-      }
-
+      // 1. Obtener análisis de mercado
+      const analyses = await this.getAllAnalyses();
       if (analyses.length === 0) {
-        logger.warn("No se pudo analizar ningún par.");
+        logger.warn("⚠️ No se pudieron obtener análisis de mercado.");
         return;
       }
 
-      logger.divider();
+      // 2. Buscar la mejor oportunidad actual
+      const topTarget = [...analyses].sort((a, b) => b.finalScore - a.finalScore)[0];
 
-      // 2. Si tenemos holding, comprobar stop loss / take profit
+      // 3. Obtener balance de USDC disponible
+      const usdcBalance = await this.exchange.getBalance('USDC');
+
+      // 4. LÓGICA DE DECISIÓN
       if (this.currentHolding) {
-        const holdingPair = `${this.currentHolding}-USDC`;
-        const holdingAnalysis = analyses.find((a) => a.pair === holdingPair);
-        const currentPrice =
-          holdingAnalysis?.currentPrice ||
-          (await this.coinbase.getPrice(holdingPair));
-
-        this.logHoldingStatus(currentPrice);
-        // 1. Si no encontramos análisis del par actual, esperamos
-        if (!holdingAnalysis) return;
-
-        // Comprobar stop loss / take profit
-        const pnlPct =
-          ((currentPrice - this.currentHoldingEntryPrice) /
-            this.currentHoldingEntryPrice) *
-          100;
-
-        if (pnlPct <= -config.stopLossPercent) {
-          logger.warn(
-            `🛑 STOP LOSS alcanzado en ${this.currentHolding} (${pnlPct.toFixed(2)}%)`,
-          );
-          await this.sellCurrentHolding(currentPrice, "STOP_LOSS");
-          // Rotar inmediatamente al mejor par disponible
-          await this.enterBestOpportunity(analyses);
-          return;
-        }
-
-        if (pnlPct >= config.takeProfitPercent) {
-          logger.success(
-            `🎯 TAKE PROFIT alcanzado en ${this.currentHolding} (${pnlPct.toFixed(2)}%)`,
-          );
-          await this.sellCurrentHolding(currentPrice, "TAKE_PROFIT");
-          // Rotar inmediatamente al mejor par disponible
-          await this.enterBestOpportunity(analyses);
-          return;
-        }
-        // 3. ¿Hay una moneda mejor? Rotar si su score supera al actual por margen suficiente
-        const currentAnalysis = analyses.find(
-          (a) => a.baseCurrency === this.currentHolding,
-        );
-        const bestAlternative = analyses
-          .filter((a) => a.baseCurrency !== this.currentHolding)
-          .sort((a, b) => b.finalScore - a.finalScore)[0];
-
-        const ROTATION_MARGIN = 25; // el alternativo debe superar al actual en 20 puntos
-        if (
-          bestAlternative &&
-          bestAlternative.finalScore >
-            (currentAnalysis?.finalScore || 0) + ROTATION_MARGIN &&
-          bestAlternative.finalScore >= config.minSignalScore
-        ) {
-          logger.trade(
-            `🔄 ROTACIÓN: ${this.currentHolding} (${currentAnalysis?.finalScore.toFixed(1)}) → ` +
-              `${bestAlternative.baseCurrency} (${bestAlternative.finalScore.toFixed(1)})`,
-          );
-          await this.rotate(bestAlternative, currentPrice);
-        } else {
-          logger.info(
-            `Manteniendo ${this.currentHolding}. Sin alternativa mejor.`,
-          );
-        }
-        return;
-      }
-
-      // 4. Sin holding — buscar el mejor par para entrar
-      await this.enterBestOpportunity(analyses);
-      const best = analyses
-        .filter((a) => a.signal === "BUY")
-        .sort((a, b) => b.finalScore - a.finalScore)[0];
-      if (best) {
-        logger.success(
-          `Mejor oportunidad: ${best.pair} (score: ${best.finalScore.toFixed(1)})`,
-        );
-        await this.buy(best);
+        await this.managePosition(topTarget, analyses);
       } else {
-        logger.info("Sin señales claras de entrada. Esperando...");
+        await this.manageEntry(topTarget, usdcBalance);
       }
-    } catch (err) {
-      logger.error(
-        "Error en ciclo:",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
 
-    logger.divider();
+    } catch (error: any) {
+      logger.error(`❌ Error en runCycle: ${error.message}`);
+    }
   }
 
-  private async analyzePair(pair: string): Promise<PairAnalysis> {
-    const baseCurrency = pair.split("-")[0];
-    const candles = await this.coinbase.getCandles(pair, "FIVE_MINUTE", 100);
+  /**
+   * Lógica para entrar al mercado cuando estamos en USDC
+   */
+  private async manageEntry(target: Analysis, balance: number) {
+    // Solo entramos si el score es alto (> 45) y tenemos al menos 2 USDC
+    if (target.finalScore > 45 && balance > 2) {
+      logger.info(`🎯 Oportunidad detectada: ${target.pair} (Score: ${target.finalScore})`);
+      await this.executeBuy(target.pair, balance);
+    } else {
+      logger.info(`💤 Esperando señal fuerte. Mejor actual: ${target.pair} (${target.finalScore})`);
+    }
+  }
 
-    if (candles.length < 30) throw new Error("Datos insuficientes");
+  /**
+   * Gestiona la posición abierta (Trailing Stop y Rotaciones)
+   */
+  private async managePosition(topTarget: Analysis, analyses: Analysis[]) {
+    const productId = `${this.currentHolding}-USDC`;
+    const currentPrice = await this.exchange.getPrice(productId);
+    const currentAnalysis = analyses.find(a => a.pair === productId);
 
-    const technical = analyzeTechnicals(candles);
-    const sentiment = await analyzeSentiment(pair, candles, technical.score);
-    if (Math.abs(sentiment.score) < 35) {
+    if (!currentAnalysis) return;
+
+    // A. ACTUALIZAR TRAILING STOP
+    if (currentPrice > this.highestPrice) {
+      this.highestPrice = currentPrice;
+      logger.info(`📈 Nuevo máximo para ${this.currentHolding}: $${currentPrice}`);
+    }
+
+    const dropFromMax = ((this.highestPrice - currentPrice) / this.highestPrice) * 100;
+const currentPnL = ((currentPrice - this.buyPrice) / this.buyPrice) * 100;
+    // B. EJECUTAR TRAILING STOP
+    if (dropFromMax >= config.trailingStopPct && currentPnL > config.minProfitFees) {
+      if (currentPnL > this.MIN_PROFIT_TO_EXIT) {
+        logger.success(`🚨 TRAILING STOP: Vendiendo ${this.currentHolding} con ${currentPnL.toFixed(2)}% de profit.`);
+        await this.executeSell();
+        return;
+      }
+    }
+
+    // C. LÓGICA DE ROTACIÓN (+25 PUNTOS)
+    if (topTarget.finalScore > (currentAnalysis.finalScore + config.rotationThreshold)) {
+      // Solo rotamos si la moneda actual ya dio algo de profit para no quemar la cuenta en comisiones
+        if (currentPnL > this.MIN_PROFIT_TO_EXIT) {
+            logger.success(`🔄 ROTACIÓN: ${this.currentHolding} (${currentAnalysis.finalScore}) -> ${topTarget.pair} (${topTarget.finalScore})`);
+            await this.executeSell();
+
+            // Pausa para actualización de balances en Coinbase
+            await new Promise(r => setTimeout(r, 2000));
+            const newBalance = await this.exchange.getBalance('USDC');
+            await this.executeBuy(topTarget.pair, newBalance);
+        }
+    } else {
+      logger.info(`✅ Holding ${this.currentHolding} | PnL: ${currentPnL.toFixed(2)}% | Score: ${currentAnalysis.finalScore}`);
+    }
+  }
+
+  private async getAllAnalyses(): Promise<Analysis[]> {
+  // 1. Creamos un array de promesas
+  const analysisPromises = this.WATCHLIST.map(async (pair) => {
+    try {
+      const price = await this.exchange.getPrice(pair);
+
+      // Esperamos a que la promesa del Score se resuelva
+      const score = await this.calculateRealScore(pair);
+
       return {
         pair,
-        baseCurrency,
-        currentPrice: technical.currentPrice,
-        sentimentScore: 0,
-        finalScore: sentiment.score,
-        signal: "HOLD",
-        technicalScore: technical.score,
-        confidence: technical.confidence,
+        finalScore: score,
+        currentPrice: price
       };
+    } catch (e) {
+      logger.error(`Error analizando ${pair}: ${e}`);
+      return null; // Si falla una, devolvemos null
     }
+  });
 
-    const combined = combineSignals(
-      technical.score,
-      technical.confidence,
-      sentiment.score,
-      sentiment.confidence,
-    );
+  // 2. Ejecutamos todas las promesas en paralelo y filtramos los errores
+  const results = await Promise.all(analysisPromises);
 
-    return {
-      pair,
-      baseCurrency,
-      currentPrice: technical.currentPrice,
-      finalScore: combined.finalScore,
-      confidence: combined.confidence,
-      signal: combined.signal,
-      technicalScore: technical.score,
-      sentimentScore: sentiment.score,
-    };
+  // Limpiamos los nulls de las monedas que fallaron
+  return results.filter((r): r is Analysis => r !== null);
+}
+
+  private async calculateRealScore(pair: string): Promise<number> {
+  try {
+    const prices = await this.exchange.getCandles(pair); // Obtenemos las últimas 60 velas
+    if (prices.length < 14) return 20; // Si no hay datos suficientes, score bajo
+
+    const currentPrice = prices[prices.length - 1];
+    const previousPrice = prices[prices.length - 2];
+
+    // 1. Cálculo de Momentum (¿Sube o baja respecto al anterior?)
+    let score = 30; // Base neutral
+    if (currentPrice > previousPrice) score += 10;
+
+    // 2. Media Móvil Simple (SMA) de las últimas 10 velas
+    const sma10 = prices.slice(-10).reduce((a:any, b:any) => a + b, 0) / 10;
+    if (currentPrice > sma10) score += 15; // Tendencia alcista
+
+    // 3. RSI Simplificado (Fuerza relativa)
+    // Si el precio actual es mayor que el de hace 14 velas, hay fuerza
+    if (currentPrice > prices[prices.length - 14]) score += 10;
+
+    // Normalizar para que no pase de 100
+    return Math.min(score, 100);
+  } catch (e) {
+    return 20; // En caso de error, devolvemos score mínimo
   }
+}
 
-  private async buy(analysis: PairAnalysis): Promise<void> {
+  private async executeBuy(pair: string, amount: number) {
     try {
-      const usdBalance = await this.coinbase.getBalance("USDC");
-      const amount = Math.min(config.tradeAmountUSD, usdBalance) * 0.98;
-      if (amount < 1) {
-        logger.warn(`Saldo USDC insuficiente: $${usdBalance.toFixed(2)}`);
-        return;
-      }
+      const safeAmount = amount * 0.97; // Usar 97% para asegurar que quepan las comisiones
+      const res = await this.exchange.marketBuy(pair, safeAmount);
 
-      const order = await this.coinbase.marketBuy(analysis.pair, amount);
-      this.currentHolding = analysis.baseCurrency;
-      this.currentHoldingSize = order.filledSize;
-      this.currentHoldingEntryPrice =
-        order.averagePrice || analysis.currentPrice;
-
-      this.currentTradeId = this.tradeHistory.openRecord(
-        analysis.pair,
-        this.currentHoldingEntryPrice,
-        this.currentHoldingSize,
-        order.filledValue || amount,
-      );
-
-      logger.success(
-        `✅ BUY ${analysis.baseCurrency} | ${this.currentHoldingSize.toFixed(6)} @ $${this.currentHoldingEntryPrice.toFixed(4)}`,
-      );
-      logger.info(
-        `  Stop Loss: $${(this.currentHoldingEntryPrice * (1 - config.stopLossPercent / 100)).toFixed(4)}`,
-      );
-      logger.info(
-        `  Take Profit: $${(this.currentHoldingEntryPrice * (1 + config.takeProfitPercent / 100)).toFixed(4)}`,
-      );
-    } catch (err) {
-      logger.error("Error en BUY:", err instanceof Error ? err.message : "");
+      this.currentHolding = pair.split('-')[0];
+      this.buyPrice = res.averagePrice;
+      this.highestPrice = res.averagePrice;
+      logger.success(`✔ COMPRADO: ${this.currentHolding} a $${this.buyPrice}`);
+    } catch (e: any) {
+      logger.error(`✖ Error en Compra: ${e.message}`);
     }
   }
 
-  private async sellCurrentHolding(
-    currentPrice: number,
-    reason: string,
-  ): Promise<void> {
-    if (!this.currentHolding) return;
-
+  private async executeSell() {
     try {
-      const balances = await this.coinbase.getBalances();
-      const coinBalance = balances.find(
-        (b) => b.currency === this.currentHolding,
-      );
-
-      if (!coinBalance || coinBalance.availableBalance <= 0) {
-        this.currentHolding = null;
-        return;
-      }
-
-      // --- EL FIX DE LOS DECIMALES ---
-      // Truncamos a 4 decimales (seguro para la mayoría de activos en Coinbase)
-      // Usamos Math.floor para no intentar vender más de lo que tenemos
-      const amountToSell = Math.floor(coinBalance.availableBalance * 100) / 100;
-
-      if (amountToSell <= 0) {
-        logger.warn(
-          "El balance tras redondear es demasiado pequeño para vender.",
-        );
-        return;
-      }
-
-      logger.info(
-        `📤 Vendiendo ${amountToSell} de ${this.currentHolding} (${reason})`,
-      );
-
       const pair = `${this.currentHolding}-USDC`;
-      const order = await this.coinbase.marketSell(pair, amountToSell);
-      const sellPrice = order.averagePrice || currentPrice;
-      const pnl = amountToSell - this.currentHoldingSize * sellPrice;
-      const pnlPct =
-        (pnl / (this.currentHoldingSize * this.currentHoldingEntryPrice)) * 100;
-      this.savePnLToHistory(pnlPct, pnlPct >= 0);
-      this.currentHolding = null;
-      this.currentHoldingSize = 0;
-    } catch (err: any) {
-      logger.error("Error en SELL:", err.message);
-    }
-  }
+      const balance = await this.exchange.getBalance(this.currentHolding!);
 
-  // Vender holding actual y comprar el alternativo
-  private async rotate(
-    target: PairAnalysis,
-    currentPrice: number,
-  ): Promise<void> {
-    await this.sellCurrentHolding(currentPrice, "SIGNAL");
-    // Pequeña pausa para que el USD quede disponible
-    await new Promise((r) => setTimeout(r, 2000));
-    await this.buy(target);
-  }
-
-  private logHoldingStatus(currentPrice: number): void {
-    if (!this.currentHolding) return;
-    const pnl =
-      (currentPrice - this.currentHoldingEntryPrice) * this.currentHoldingSize;
-    const pnlPct =
-      ((currentPrice - this.currentHoldingEntryPrice) /
-        this.currentHoldingEntryPrice) *
-      100;
-    const pnlStr =
-      pnl >= 0
-        ? `+$${pnl.toFixed(2)} (+${pnlPct.toFixed(2)}%)`
-        : `-$${Math.abs(pnl).toFixed(2)} (${pnlPct.toFixed(2)}%)`;
-    logger.info(
-      `Holding: ${this.currentHolding} @ $${currentPrice.toFixed(4)} | PnL: ${pnlStr}`,
-    );
-  }
-  private async enterBestOpportunity(analyses: PairAnalysis[]): Promise<void> {
-    await new Promise((r) => setTimeout(r, 2000)); // esperar que USD quede disponible
-
-    const best = analyses
-      .filter(
-        (a) => a.signal === "BUY" && a.baseCurrency !== this.currentHolding,
-      )
-      .sort((a, b) => b.finalScore - a.finalScore)[0];
-
-    if (best) {
-      logger.trade(
-        `↪ Entrando inmediatamente en ${best.pair} (score: ${best.finalScore.toFixed(1)})`,
-      );
-      await this.buy(best);
-    } else {
-      logger.info(
-        "Sin oportunidades claras tras venta. Esperando siguiente ciclo en USD.",
-      );
+      if (balance > 0) {
+        await this.exchange.marketSell(pair, balance);
+        logger.success(`📤 VENDIDO: ${this.currentHolding} - Volviendo a USDC`);
+        this.currentHolding = null;
+        this.highestPrice = 0;
+        this.buyPrice = 0;
+      }
+    } catch (e: any) {
+      logger.error(`✖ Error en Venta: ${e.message}`);
     }
   }
 }
