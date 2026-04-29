@@ -2,19 +2,20 @@ export class Indicators {
   /**
    * Calcula la Media Móvil Exponencial (EMA)
    */
-  static calculateEMA(candles: any[], period: number): number {
-    if (candles.length < period) return candles[candles.length - 1].close;
+ static calculateEMA(candles: any[], period: number): number {
+    if (candles.length === 0) return 0;
 
-    const k = 2 / (period + 1);
-    // Empezamos con el promedio simple de los primeros periodos como base
-    let ema = candles.slice(0, period).reduce((acc, val) => acc + val.close, 0) / period;
+    // Si hay menos velas que el periodo pedido, ajustamos el periodo a lo que hay
+    const actualPeriod = candles.length < period ? candles.length : period;
 
-    // Aplicamos la fórmula al resto de las velas
-    for (let i = period; i < candles.length; i++) {
+    const k = 2 / (actualPeriod + 1);
+    let ema = candles.slice(0, actualPeriod).reduce((acc, val) => acc + val.close, 0) / actualPeriod;
+
+    for (let i = actualPeriod; i < candles.length; i++) {
       ema = (candles[i].close - ema) * k + ema;
     }
     return ema;
-  }
+}
 
   /**
    * Calcula el RSI (Relative Strength Index)
@@ -28,7 +29,7 @@ export class Indicators {
     for (let i = candles.length - period; i < candles.length; i++) {
       const diff = candles[i].close - candles[i - 1].close;
       if (diff >= 0) gains += diff;
-      else losses -= Math.abs(diff);
+      else losses += Math.abs(diff);
     }
 
     if (losses === 0) return 100;

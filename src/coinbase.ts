@@ -1,7 +1,7 @@
-import fetch from 'node-fetch';
-import jwt from 'jsonwebtoken';
-import { config } from './config';
-import { logger } from './logger';
+import fetch from "node-fetch";
+import jwt from "jsonwebtoken";
+import { config } from "./config";
+import { logger } from "./logger";
 
 export interface Candle {
   timestamp: number;
@@ -15,7 +15,7 @@ export interface Candle {
 export interface OrderResult {
   orderId: string;
   status: string;
-  side: 'BUY' | 'SELL';
+  side: "BUY" | "SELL";
   filledSize: number;
   filledValue: number;
   averagePrice: number;
@@ -28,15 +28,15 @@ export interface AccountBalance {
 }
 
 export class CoinbaseClient {
-  private readonly baseUrl = 'https://api.coinbase.com';
+  private readonly baseUrl = "https://api.coinbase.com";
 
   private sign(method: string, path: string): Record<string, string> {
-    const secret = config.coinbaseApiSecret.replace(/\\n/g, '\n');
-    const cleanPath = path.split('?')[0];
+    const secret = config.coinbaseApiSecret.replace(/\\n/g, "\n");
+    const cleanPath = path.split("?")[0];
     const uri = `${method.toUpperCase()} api.coinbase.com${cleanPath}`;
 
     const payload = {
-      iss: 'cdp',
+      iss: "cdp",
       nbf: Math.floor(Date.now() / 1000),
       exp: Math.floor(Date.now() / 1000) + 120,
       sub: config.coinbaseApiKey,
@@ -44,21 +44,25 @@ export class CoinbaseClient {
     };
 
     const token = (jwt as any).sign(payload, secret, {
-      algorithm: 'ES256',
+      algorithm: "ES256",
       header: {
         kid: config.coinbaseApiKey,
-        nonce: require('crypto').randomBytes(16).toString('hex'),
+        nonce: require("crypto").randomBytes(16).toString("hex"),
       },
     });
 
     return {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     };
   }
 
-  private async request<T>(method: string, path: string, body?: object): Promise<T> {
-    const bodyStr = body ? JSON.stringify(body) : '';
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: object,
+  ): Promise<T> {
+    const bodyStr = body ? JSON.stringify(body) : "";
     const headers = this.sign(method, path);
 
     const res = await fetch(`${this.baseUrl}${path}`, {
@@ -77,23 +81,35 @@ export class CoinbaseClient {
 
   async getPrice(productId: string): Promise<number> {
     const path = `/api/v3/brokerage/products/${productId}`;
-    const data = await this.request<{ price: string }>('GET', path);
+    const data = await this.request<{ price: string }>("GET", path);
     return parseFloat(data.price);
   }
 
   async getBalances(): Promise<AccountBalance[]> {
-    const data = await this.request<{ accounts: any[] }>('GET', '/api/v3/brokerage/accounts');
+    const data = await this.request<{ accounts: any[] }>(
+      "GET",
+      "/api/v3/brokerage/accounts",
+    );
 
-    // DEBUG: Si no ves BTC, revisa este log en tu consola
-    // console.log("Monedas encontradas en Coinbase:", data.accounts.map(a => a.currency));
+    // ESTO TE DIRÁ QUÉ PASA:
+    console.log("--- COINBASE RESPONDE ---");
+    data.accounts.forEach((a) => {
+      if (
+        parseFloat(a.available_balance.value) > 0 ||
+        parseFloat(a.hold.value) > 0
+      ) {
+        console.log(
+          `Moneda: ${a.currency} | Disponible: ${a.available_balance.value} | Retenido: ${a.hold.value} | Tipo: ${a.type}`,
+        );
+      }
+    });
 
     return (data.accounts || []).map((a) => ({
       currency: a.currency,
-      availableBalance: parseFloat(a.available_balance?.value || '0'),
-      holdBalance: parseFloat(a.hold?.value || '0'),
+      availableBalance: parseFloat(a.available_balance?.value || "0"),
+      holdBalance: parseFloat(a.hold?.value || "0"),
     }));
   }
-
   async getBalance(currency: string): Promise<number> {
     const balances = await this.getBalances();
     // Buscamos coincidencia exacta (BTC, USDC, etc)
@@ -106,13 +122,19 @@ export class CoinbaseClient {
     const bodyMarket = {
       client_order_id: clientOrderId,
       product_id: productId,
-      side: 'BUY',
-      order_configuration: { market_market_ioc: { quote_size: quoteSize.toFixed(2) } },
+      side: "BUY",
+      order_configuration: {
+        market_market_ioc: { quote_size: quoteSize.toFixed(2) },
+      },
     };
 
-    const data: any = await this.request('POST', '/api/v3/brokerage/orders', bodyMarket);
+    const data: any = await this.request(
+      "POST",
+      "/api/v3/brokerage/orders",
+      bodyMarket,
+    );
     if (!data.success) throw new Error(data.error_response?.message);
-    return this.getOrderDetails(data.success_response.order_id, 'BUY');
+    return this.getOrderDetails(data.success_response.order_id, "BUY");
   }
 
   async marketSell(productId: string, baseSize: number): Promise<OrderResult> {
@@ -120,56 +142,63 @@ export class CoinbaseClient {
     const bodyMarket = {
       client_order_id: clientOrderId,
       product_id: productId,
-      side: 'SELL',
-      order_configuration: { market_market_ioc: { base_size: baseSize.toFixed(8) } },
+      side: "SELL",
+      order_configuration: {
+        market_market_ioc: { base_size: baseSize.toFixed(8) },
+      },
     };
 
     logger.trade(`Enviando orden SELL: ${baseSize} de ${productId}`);
-    const data = await this.request<any>('POST', '/api/v3/brokerage/orders', bodyMarket);
+    const data = await this.request<any>(
+      "POST",
+      "/api/v3/brokerage/orders",
+      bodyMarket,
+    );
     if (!data.success) throw new Error(data.error_response?.message);
 
     await new Promise((r) => setTimeout(r, 1500));
-    return this.getOrderDetails(data.success_response!.order_id, 'SELL');
+    return this.getOrderDetails(data.success_response!.order_id, "SELL");
   }
 
-  private async getOrderDetails(orderId: string, side: 'BUY' | 'SELL'): Promise<OrderResult> {
-    const data = await this.request<any>('GET', `/api/v3/brokerage/orders/historical/${orderId}`);
+  private async getOrderDetails(
+    orderId: string,
+    side: "BUY" | "SELL",
+  ): Promise<OrderResult> {
+    const data = await this.request<any>(
+      "GET",
+      `/api/v3/brokerage/orders/historical/${orderId}`,
+    );
     const o = data.order;
     return {
-      orderId: o.order_id, status: o.status, side,
-      filledSize: parseFloat(o.filled_size || '0'),
-      filledValue: parseFloat(o.filled_value || '0'),
-      averagePrice: parseFloat(o.average_filled_price || '0'),
+      orderId: o.order_id,
+      status: o.status,
+      side,
+      filledSize: parseFloat(o.filled_size || "0"),
+      filledValue: parseFloat(o.filled_value || "0"),
+      averagePrice: parseFloat(o.average_filled_price || "0"),
     };
   }
- async getCandles(productId: string): Promise<any[]> {
-  // Aumentamos el rango a 2 horas (7200 seg) para asegurar que siempre haya suficientes velas para el RSI (14 periodos)
-  const start = Math.floor(Date.now() / 1000) - 7200;
-  const end = Math.floor(Date.now() / 1000);
-  const path = `/api/v3/brokerage/products/${productId}/candles?start=${start}&end=${end}&granularity=ONE_MINUTE`;
+  async getCandles(productId: string): Promise<any[]> {
+    // Pedimos 24 horas (86400 seg) para tener ~288 velas de 5 min
+    const start = Math.floor(Date.now() / 1000) - 24 * 3600;
+    const end = Math.floor(Date.now() / 1000);
+    const path = `/api/v3/brokerage/products/${productId}/candles?start=${start}&end=${end}&granularity=FIVE_MINUTE`;
 
-  try {
-    const data = await this.request<any>('GET', path);
+    try {
+      const data = await this.request<any>("GET", path);
+      if (!data || !data.candles || !Array.isArray(data.candles)) return [];
 
-    if (!data || !data.candles || !Array.isArray(data.candles)) {
-      console.log(`⚠️ No se recibieron velas para ${productId}`);
+      return data.candles
+        .map((c: any) => ({
+          close: parseFloat(c.close || "0"),
+          high: parseFloat(c.high || "0"),
+          low: parseFloat(c.low || "0"),
+          open: parseFloat(c.open || "0"),
+        }))
+        .filter((c: any) => c.close > 0)
+        .reverse();
+    } catch (error) {
       return [];
     }
-
-    // Retornamos un objeto mapeado correctamente
-    // Reverse es importante porque Coinbase las devuelve de la más nueva a la más antigua
-    return data.candles
-      .map((c: any) => ({
-        close: parseFloat(c.close || c.price || "0"),
-        high: parseFloat(c.high || "0"),
-        low: parseFloat(c.low || "0"),
-        open: parseFloat(c.open || "0")
-      }))
-      .filter((c:any) => c.close > 0) // Filtramos datos corruptos
-      .reverse();
-  } catch (error) {
-    console.error(`❌ Error en getCandles para ${productId}:`, error);
-    return [];
   }
-}
 }

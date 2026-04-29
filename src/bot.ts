@@ -33,9 +33,9 @@ export class TradingBot {
       await this.syncWallet();
 
       const analyses = await this.getAllAnalyses();
-      if (analyses.length === 0) return;
+      if (analyses!.length === 0) return;
 
-      const topTarget = analyses.sort((a, b) => b.finalScore - a.finalScore)[0];
+      const topTarget = analyses!.sort((a, b) => b.finalScore - a.finalScore)[0];
       logger.info(
         `🔝 Mejor oportunidad: ${topTarget.pair} (Score: ${topTarget.finalScore})`,
       );
@@ -52,6 +52,9 @@ export class TradingBot {
 
   private async syncWallet() {
     const balances = await this.exchange.getBalances();
+    const usdcAccount = balances.find((b) => b.currency === "USDC");
+    const usdcBalance = usdcAccount ? usdcAccount.availableBalance : 0;
+    logger.info(`💵 Saldo USDC detectado: $${usdcBalance}`);
     // Filtro de seguridad: ignoramos saldos menores a $1 para no detectar "basura"
     const holding = balances.find(
       (b) => b.currency !== "USDC" && b.availableBalance > 0.1,
@@ -139,56 +142,65 @@ export class TradingBot {
   }
 
   private async getAllAnalyses() {
-    const results = [];
-    // Procesamiento secuencial para evitar Rate Limit 429 de Groq
-    for (const pair of config.watchlist) {
-      try {
-        const res = await this.getSpecificAnalysis(pair);
-        if (res) {
-          logger.info(`✅ Score obtenido para ${pair}: ${res.finalScore}`);
-          results.push(res);
-        } else {
-          logger.warn(`⚠️ ${pair} no devolvió análisis.`); // <-- Añade esto
-        }
-      } catch (e:any) {
-        logger.error(`🔥 Crash en ${pair}: ${e.message}`);
-      }
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    return results;
-  }
-
-  private async getSpecificAnalysis(pair: string) {
+  const results = [];
+  for (const pair of config.watchlist) {
     try {
-      const candles = await this.exchange.getCandles(pair);
-      if (!candles || candles.length < 20) return null;
-
-      const currentPrice = candles[candles.length - 1].close;
-      const rsi = Indicators.calculateRSI(candles);
-      const emaValue = Indicators.calculateEMA(
-        candles,
-        config.emaPeriod || 200,
-      );
-
-      // Inyectamos lógica técnica antes de Groq para dar contexto
-      let technicalSummary = `RSI: ${rsi.toFixed(2)}, Precio: ${currentPrice}`;
-      technicalSummary +=
-        currentPrice > emaValue ? " (Encima de EMA200)" : " (Debajo de EMA200)";
-
-      const score = await this.ai.analyzeWithGroq(pair, {
-        rsi,
-        price: currentPrice,
-        trend: technicalSummary,
-      });
-
-      return { pair, finalScore: score };
-    } catch (e: any) {
-      if (!e.message.includes("404")) {
-        logger.error(`Error en análisis de ${pair}: ${e.message}`);
+      const res = await this.getSpecificAnalysis(pair);
+      // Solo añadimos si el resultado es un objeto válido y tiene score
+      if (res && typeof res === 'object' && res.finalScore !== undefined) {
+        results.push(res);
       }
+    } catch (e) {
+      // Ignoramos el error de una moneda individual para no romper el bucle
+      continue;
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  return results;
+}
+
+private async getSpecificAnalysis(pair: string) {
+  try {
+    // 1. Filtro radical: Si es EUR o algo raro, ni lo intentamos
+    if (!pair || pair.includes('EUR') || pair.includes('USD-USDC')) {
       return null;
     }
+
+    const candles = await this.exchange.getCandles(pair);
+console.log(`[${pair}] Velas recibidas: ${candles.length} | Primera: ${candles[0].close} | Última: ${candles[candles.length-1].close}`);
+    // 2. PROTECCIÓN CRÍTICA: Aquí es donde fallaba.
+    // Verificamos que candles NO sea null y que TENGA contenido antes de usar .length
+    if (!candles || !Array.isArray(candles) || candles.length === 0) {
+      // logger.warn(`[${pair}] Sin datos de velas suficientes.`);
+      return null;
+    }
+
+    // 3. Ahora sí es seguro acceder a los índices
+    const currentPrice = candles[candles.length - 1].close;
+    const rsi = Indicators.calculateRSI(candles);
+    const emaValue = Indicators.calculateEMA(candles, config.emaPeriod || 20);
+
+    const trend = currentPrice > emaValue ? "Tendencia Alcista" : "Tendencia Bajista";
+
+    const score = await this.ai.analyzeWithGroq(pair, {
+      rsi,
+      price: currentPrice,
+      trend
+    });
+    console.log('tendencia:', pair, trend)
+    console.log('rsi:', rsi)
+    console.log('emaValue:', emaValue)
+    console.log('currentPrice:',currentPrice)
+    console.log('trend:',trend)
+    return { pair, finalScore: score };
+
+  } catch (error: any) {
+    // Si algo falla dentro (como un error 400 de Coinbase),
+    // lo capturamos aquí para que el ciclo principal continúe
+    // logger.error(`Error analizando ${pair}: ${error.message}`);
+    return null;
   }
+}
 
   private async executeBuy(pair: string, usdAmount: number) {
     try {

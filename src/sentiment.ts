@@ -69,6 +69,7 @@ export class SentimentAnalyzer {
         return 50;
       }
 
+      console.log('sentimiento:',score)
       return score;
     } catch (error: any) {
       logger.error(`Error en Groq para ${pair}: ${error.message}`);
