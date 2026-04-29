@@ -47,6 +47,7 @@ export class BalanceManager {
   async printReport() {
     try {
       const rawBalances = await this.client.getBalances();
+      console.log("CUENTAS DETECTADAS:", JSON.stringify(rawBalances, null, 2));
       let totalValue = 0;
       // Usamos el capital inicial del .env
       const initialInv = parseFloat(process.env.INITIAL_INVESTMENT || '25.00');
@@ -59,7 +60,7 @@ export class BalanceManager {
         if (account.availableBalance <= 0) continue;
         let valueInUSDC = 0;
 
-        if (account.currency === 'USDC' || account.currency === 'USD') {
+        if (['USDC', 'USD', 'EUR'].includes(account.currency)) {
           valueInUSDC = account.availableBalance;
         } else {
           try {

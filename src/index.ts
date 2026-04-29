@@ -3,24 +3,35 @@ import { logger } from './logger';
 import { config, validateConfig } from './config';
 import { CoinbaseClient } from './coinbase';
 
+
 async function start() {
   logger.info('🚀 Iniciando Sistema de Trading Inteligente...');
   try {
-    // Validamos antes de instanciar nada
     validateConfig();
 
-    // 1. Instanciar el bot
-    // Al instanciarlo fuera del bucle, permitimos que guarde variables como 'highestPrice'
     const bot = new TradingBot();
     const exchange = new CoinbaseClient();
-    const btcBalance = await exchange.getBalance('BTC'); // Opcional: ver también BTC
-    const realBalance = await exchange.getBalance('USDC');
+
+    // 1. Obtenemos TODOS los balances de la cuenta
+    const allBalances = await exchange.getBalances();
+
+    // 2. Filtramos para quedarnos solo con lo que tenga saldo real (mayor a un umbral)
+    // Usamos 0.000001 para ignorar las monedas que están a cero absoluto
+    const actualHoldings = allBalances.filter(b => b.availableBalance > 0.000001);
+
+    // 3. Formateamos la lista de monedas para el log
+    const holdingsString = actualHoldings
+      .map(h => `- ${h.currency}: ${h.availableBalance.toFixed(h.currency === 'USDC' ? 2 : 8)}`)
+      .join('\n    ');
+
+    const usdcBalance = actualHoldings.find(h => h.currency === 'USDC')?.availableBalance || 0;
 
     logger.info(`⚙️ Configuración cargada:
     - Umbral de Rotación: +${25} puntos
     - Trailing Stop: ${3.5}%
-   - Capital Disponible: $${realBalance.toFixed(2)} USDC
-   - BTC en Cartera: ${btcBalance.toFixed(8)} BTC
+    - Capital Disponible: $${usdcBalance.toFixed(2)} USDC
+    - Monedas actuales en cartera:
+    ${holdingsString}
   `);
 
     // 2. Bucle de ejecución infinito
