@@ -26,23 +26,28 @@ export class SentimentAnalyzer {
   async analyzeWithGroq(
     pair: string,
     data: { rsi: number; price: number; trend: string },
+    btcContext: any
   ): Promise<number> {
     try {
       const prompt = `
-        Analiza como trader experto el par ${pair}:
-        - RSI: ${data.rsi.toFixed(2)}
-        - Precio: ${data.price}
-        - Tendencia: ${data.trend}
+      Eres un analista experto. Analiza el par ${pair}.
 
-        Responde ÚNICAMENTE con un número entero del 1 al 100.
-        - 80-100: Compra fuerte (RSI bajo, tendencia recuperando).
-        - 60-79: Compra moderada.
-        - 40-59: Neutral/Espera.
-        - 1-39: Venta (Sobrecarga, RSI muy alto > 70).
+    CONTEXTO GLOBAL DEL MERCADO (BTC):
+    - Precio BTC: $${btcContext.btcPrice}
+    - Variación BTC: ${btcContext.btcChange24h}%
+    - Tendencia BTC: ${btcContext.btcTrend}
 
-        No incluyas texto, solo el número.
-      `;
+    DATOS TÉCNICOS DE ${pair}:
+    - Precio: ${data.price}
+    - RSI: ${data.rsi}
+    - Tendencia local: ${data.trend}
 
+    REGLA CRÍTICA:
+    Si la tendencia de BTC es BAJISTA o su variación es menor a -3%, sé muy estricto con el Score de ${pair}.
+    No des puntuaciones altas a menos que ${pair} muestre una fuerza excepcional contra la caída de BTC.
+
+    Devuelve solo un número del 1 al 100 (Score).
+  `;
       const completion = await this.groq.chat.completions.create({
         messages: [
           {
@@ -69,7 +74,6 @@ export class SentimentAnalyzer {
         return 50;
       }
 
-      console.log('sentimiento:',score)
       return score;
     } catch (error: any) {
       logger.error(`Error en Groq para ${pair}: ${error.message}`);

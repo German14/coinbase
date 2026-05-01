@@ -3,6 +3,7 @@ import { SentimentAnalyzer } from "./sentiment";
 import { Indicators } from "./indicators";
 import { config } from "./config";
 import { logger } from "./logger";
+import { RiskManager } from "./risk";
 
 export class TradingBot {
   private exchange: CoinbaseClient;
@@ -11,6 +12,7 @@ export class TradingBot {
   private buyPrice: number = 0;
   private highestPrice: number = 0;
   private isRotating: boolean = false;
+  private riskManager: RiskManager = new RiskManager();
 
   constructor() {
     this.exchange = new CoinbaseClient();
@@ -35,16 +37,21 @@ export class TradingBot {
       const analyses = await this.getAllAnalyses();
       if (analyses!.length === 0) return;
 
-      const topTarget = analyses!.sort((a, b) => b.finalScore - a.finalScore)[0];
+      const topTarget = analyses!.sort(
+        (a, b) => b.finalScore - a.finalScore,
+      )[0];
       logger.info(
         `🔝 Mejor oportunidad: ${topTarget.pair} (Score: ${topTarget.finalScore})`,
       );
 
+      console.log('holding',this.currentHolding)
       if (this.currentHolding) {
         await this.managePosition(topTarget);
       } else {
         await this.evaluateNewEntry(topTarget);
       }
+
+
     } catch (error: any) {
       logger.error(`✖ Error en el ciclo: ${error.message}`);
     }
@@ -85,49 +92,78 @@ export class TradingBot {
   }
 
   private async managePosition(topTarget: any) {
-    const pair = `${this.currentHolding}-USDC`;
-    const currentPrice = await this.exchange.getPrice(pair);
-    const pnl = ((currentPrice - this.buyPrice) / this.buyPrice) * 100;
+    // 1. Validar que tenemos una posición cargada en el RiskManager
+    const position = this.riskManager.getOpenPosition();
+    if (!position) return;
 
-    if (currentPrice > this.highestPrice) this.highestPrice = currentPrice;
-    const dropFromMax =
-      ((this.highestPrice - currentPrice) / this.highestPrice) * 100;
+    const currentPair = position.productId; // Ya incluye el '-USDC'
+    const currentAnalysis = await this.getSpecificAnalysis(currentPair);
 
-    logger.info(
-      `📊 Status ${this.currentHolding}: PNL: ${pnl.toFixed(2)}% | Drop: ${dropFromMax.toFixed(2)}%`,
-    );
+    if (!currentAnalysis) return;
 
-    // 1. Trailing Stop Loss
-    if (dropFromMax >= config.trailingStopPct && pnl > config.minProfitFees) {
-      logger.warn(`📉 Trailing Stop activado en ${this.currentHolding}.`);
+    // 2. Cálculo de PnL real
+    const { pnlPercent } = this.riskManager.getPnL(currentAnalysis.price);
+
+    // 3. Verificación de Stop Loss / Take Profit (Salidas de emergencia)
+    // Usamos los valores guardados en la posición, no en 'this'
+    if (
+      currentAnalysis.price <= position.stopLoss ||
+      currentAnalysis.price >= position.takeProfit
+    ) {
+      logger.warn(`⚠️ Salida forzada para ${currentPair} (SL/TP alcanzado)`);
       await this.executeSell();
       return;
     }
 
-    // 2. Rotación Inteligente
-    if (topTarget.pair !== pair) {
-      const currentAnalysis = await this.getSpecificAnalysis(pair);
-      const scoreDiff =
-        topTarget.finalScore - (currentAnalysis?.finalScore || 50);
+    // 4. LÓGICA DE ROTACIÓN PROTEGIDA
+    if (topTarget.pair !== currentPair) {
+      const advantage = topTarget.finalScore - currentAnalysis.finalScore;
+// LOG DE DIAGNÓSTICO INICIAL
+logger.info(`⚖️ Comparando: ${currentPair} (${currentAnalysis.finalScore}) vs ${topTarget.pair} (${topTarget.finalScore})`);
+logger.info(`   • Ventaja calculada: ${advantage} puntos`);
+      logger.info(`   • Umbral requerido (rotationThreshold): ${config.rotationThreshold} puntos`);
+
+      // Filtro 1: ¿Ya cubrimos las comisiones? (Tu 2.2% de config)
+      const hasCoveredFees = pnlPercent > config.minProfitFees;
+
+      // Filtro 2: ¿La nueva oportunidad es una "Super Señal" que solventa la pérdida?
+      const isPowerfulSignal =
+        topTarget.finalScore >= 85 && advantage > config.rotationThreshold + 15;
+
+      // Filtro 3: Validación Técnica (EMA y RSI)
+      const isTechnicalValid =
+        topTarget.trend === "Tendencia Alcista" && topTarget.rsi < 65;
 
       if (
-        scoreDiff >= config.rotationThreshold &&
-        topTarget.finalScore >= config.minSignalScore
+        (hasCoveredFees || isPowerfulSignal) &&
+        isTechnicalValid &&
+        advantage >= config.rotationThreshold
       ) {
         logger.warn(
-          `🔄 Ventaja detectada: ${topTarget.pair} (+${scoreDiff} pts sobre ${this.currentHolding})`,
+          `🔄 Rotación validada: De ${currentPair} a ${topTarget.pair}`,
         );
-        this.isRotating = true;
-        await this.executeSell();
+        logger.info(
+          `📊 PnL Actual: ${pnlPercent.toFixed(2)}% | Ventaja IA: +${advantage} puntos`,
+        );
 
-        setTimeout(async () => {
-          const balance = await this.exchange.getBalance("USDC");
-          if (balance > 2) {
-            await this.executeBuy(topTarget.pair, balance);
-          }
-          this.isRotating = false;
-        }, 5000); // 5 segundos para asegurar balance en Coinbase
+        this.isRotating = true; // Bloqueamos el ciclo
+        await this.executeSell();
+        this.isRotating = false;
+      } else {
+        // Si no cumple, imprimimos por qué se queda quieto (útil para debug)
+        if (advantage >= config.rotationThreshold) {
+          logger.info(
+            `🚫 Rotación denegada por costos: PnL (${pnlPercent.toFixed(2)}%) < Fees (${config.minProfitFees}%)`,
+          );
+        }
       }
+      logger.info(`📊 Estado de ${currentPair}:`);
+      logger.info(`   • Precio Actual: $${currentAnalysis.price}`);
+      logger.info(`   • PnL Bruto: ${pnlPercent.toFixed(2)}%`);
+      logger.info(`   • Umbral de Fees: ${config.minProfitFees}%`);
+      logger.info(
+        `   • RSI: ${currentAnalysis.rsi} | Score IA: ${currentAnalysis.finalScore}`,
+      );
     }
   }
 
@@ -142,66 +178,92 @@ export class TradingBot {
   }
 
   private async getAllAnalyses() {
-  const results = [];
-  for (const pair of config.watchlist) {
-    try {
-      const res = await this.getSpecificAnalysis(pair);
-      // Solo añadimos si el resultado es un objeto válido y tiene score
-      if (res && typeof res === 'object' && res.finalScore !== undefined) {
-        results.push(res);
+    const results = [];
+    for (const pair of config.watchlist) {
+      try {
+        const res = await this.getSpecificAnalysis(pair);
+        // Solo añadimos si el resultado es un objeto válido y tiene score
+        if (res && typeof res === "object" && res.finalScore !== undefined) {
+          results.push(res);
+        }
+      } catch (e) {
+        // Ignoramos el error de una moneda individual para no romper el bucle
+        continue;
       }
-    } catch (e) {
-      // Ignoramos el error de una moneda individual para no romper el bucle
-      continue;
+      await new Promise((r) => setTimeout(r, 2000));
     }
-    await new Promise(r => setTimeout(r, 2000));
+    return results;
   }
-  return results;
-}
 
-private async getSpecificAnalysis(pair: string) {
-  try {
-    // 1. Filtro radical: Si es EUR o algo raro, ni lo intentamos
-    if (!pair || pair.includes('EUR') || pair.includes('USD-USDC')) {
+  private async getSpecificAnalysis(pair: string) {
+    try {
+      // 1. Filtro radical: Si es EUR o algo raro, ni lo intentamos
+      if (!pair || pair.includes("EUR") || pair.includes("USD-USDC")) {
+        return null;
+      }
+      const btcContext = await this.getBitcoinContext();
+
+
+      const candles = await this.exchange.getCandles(pair);
+      console.log(
+        `[${pair}] Velas recibidas: ${candles.length} | Primera: ${candles[0].close} | Última: ${candles[candles.length - 1].close}`,
+      );
+      // 2. PROTECCIÓN CRÍTICA: Aquí es donde fallaba.
+      // Verificamos que candles NO sea null y que TENGA contenido antes de usar .length
+      if (!candles || !Array.isArray(candles) || candles.length === 0) {
+        // logger.warn(`[${pair}] Sin datos de velas suficientes.`);
+        return null;
+      }
+
+      // 3. Ahora sí es seguro acceder a los índices
+      const currentPrice = candles[candles.length - 1].close;
+      const rsi = Indicators.calculateRSI(candles);
+      const emaValue = Indicators.calculateEMA(candles, config.emaPeriod || 20);
+
+      const trend =
+        currentPrice > emaValue ? "Tendencia Alcista" : "Tendencia Bajista";
+
+      const score = await this.ai.analyzeWithGroq(pair, {
+        rsi,
+        price: currentPrice,
+        trend,
+      },btcContext);
+
+      console.log("tendencia:", pair, trend);
+      console.log("rsi:", rsi);
+      console.log("emaValue:", emaValue);
+      console.log("currentPrice:", currentPrice);
+      console.log("trend:", trend);
+      console.log("score:", score);
+      return {
+        pair,
+        finalScore: score,
+        price: currentPrice, // 👈 CRUCIAL: Necesario para el PnL
+        trend, // 👈 CRUCIAL: Necesario para validar la rotación
+        rsi,
+        btcRef: btcContext.btcChange24h // Opcional: guardarlo para los logs
+      };
+    } catch (error: any) {
+      // Si algo falla dentro (como un error 400 de Coinbase),
+      // lo capturamos aquí para que el ciclo principal continúe
+      // logger.error(`Error analizando ${pair}: ${error.message}`);
       return null;
     }
-
-    const candles = await this.exchange.getCandles(pair);
-console.log(`[${pair}] Velas recibidas: ${candles.length} | Primera: ${candles[0].close} | Última: ${candles[candles.length-1].close}`);
-    // 2. PROTECCIÓN CRÍTICA: Aquí es donde fallaba.
-    // Verificamos que candles NO sea null y que TENGA contenido antes de usar .length
-    if (!candles || !Array.isArray(candles) || candles.length === 0) {
-      // logger.warn(`[${pair}] Sin datos de velas suficientes.`);
-      return null;
-    }
-
-    // 3. Ahora sí es seguro acceder a los índices
-    const currentPrice = candles[candles.length - 1].close;
-    const rsi = Indicators.calculateRSI(candles);
-    const emaValue = Indicators.calculateEMA(candles, config.emaPeriod || 20);
-
-    const trend = currentPrice > emaValue ? "Tendencia Alcista" : "Tendencia Bajista";
-
-    const score = await this.ai.analyzeWithGroq(pair, {
-      rsi,
-      price: currentPrice,
-      trend
-    });
-    console.log('tendencia:', pair, trend)
-    console.log('rsi:', rsi)
-    console.log('emaValue:', emaValue)
-    console.log('currentPrice:',currentPrice)
-    console.log('trend:',trend)
-    return { pair, finalScore: score };
-
-  } catch (error: any) {
-    // Si algo falla dentro (como un error 400 de Coinbase),
-    // lo capturamos aquí para que el ciclo principal continúe
-    // logger.error(`Error analizando ${pair}: ${error.message}`);
-    return null;
   }
-}
+async getBitcoinContext() {
+  const btcCandles = await this.exchange.getCandles("BTC-USDC");
+  const currentPrice = btcCandles[btcCandles.length - 1].close;
+  const openPrice = btcCandles[0].close; // Precio de hace X periodos
 
+  // Calculamos la variación porcentual simple
+  const btcChange24h = ((currentPrice - openPrice) / openPrice) * 100;
+
+  return {
+    btcPrice: currentPrice,
+    btcChange24h: btcChange24h.toFixed(2),
+    btcTrend: currentPrice > Indicators.calculateEMA(btcCandles, 20) ? "ALCISTA" : "BAJISTA"
+  };
+}
   private async executeBuy(pair: string, usdAmount: number) {
     try {
       const amountToUse = usdAmount * 0.98; // Reservar 2% para fees

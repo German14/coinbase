@@ -47,7 +47,7 @@ export class BalanceManager {
   async printReport() {
     try {
       const rawBalances = await this.client.getBalances();
-      console.log("CUENTAS DETECTADAS:", JSON.stringify(rawBalances, null, 2));
+
       let totalValue = 0;
       // Usamos el capital inicial del .env
       const initialInv = parseFloat(process.env.INITIAL_INVESTMENT || '25.00');
