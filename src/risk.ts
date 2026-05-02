@@ -16,36 +16,32 @@ export class RiskManager {
   private readonly URGENT_REBALANCE_LOSS_LIMIT = -0.02; // -2%
 
 public needsUrgentRebalance(currentProfit: number, currentScore: number, bestNewScore: number): boolean {
-    // 🔥 REBALANCEO MÁS AGRESIVO PERO CON COMISIONES 🔥
+    const totalFees = config.minProfitFees; // Fee estimada en porcentaje
+    const netProfitAfterFees = currentProfit - totalFees / 100;
+    const scoreDelta = bestNewScore - currentScore;
 
-    // Primero: Verificar si las comisiones valen la pena
-    const totalFees = config.minProfitFees; // 2.2%
-    const netProfitAfterFees = currentProfit - (totalFees / 100);
-
-    // Si estamos en pérdida neta después de fees, cualquier mejora vale la pena
     if (netProfitAfterFees < 0) {
-        console.log(`💸 En pérdida neta (${(netProfitAfterFees*100).toFixed(2)}% después de fees), rota si hay mejora`);
-        return (bestNewScore - currentScore) > 10; // Solo 10 puntos de diferencia mínima
+        console.log(`💸 En pérdida neta (${(netProfitAfterFees * 100).toFixed(2)}% después de fees), solo rota si hay un salto fuerte de score`);
+        return scoreDelta >= config.rotationThreshold + 10 || (currentScore < 40 && bestNewScore > 85);
     }
 
-    // Si estamos en ganancia, ser más selectivo
     if (currentProfit > 0) {
-        // Solo rota si la diferencia es muy grande (compensará las fees)
-        if ((bestNewScore - currentScore) > 40) {
-            console.log(`🚀 Rotación justificada: diferencia ${(bestNewScore - currentScore)}pts > 40pts`);
+        if (scoreDelta >= config.rotationThreshold) {
+            console.log(`🚀 Rotación justificada: diferencia ${scoreDelta.toFixed(1)}pts >= ${config.rotationThreshold}pts`);
             return true;
         }
-        // O si la nueva es excelente y la actual pésima
+
         if (currentScore < 40 && bestNewScore > 80) {
-            console.log(`🔥 Rotación justificada: actual pésima (${currentScore}) vs excelente (${bestNewScore})`);
+            console.log(`🔥 Rotación justificada por cambio extremo: actual ${currentScore}, nuevo ${bestNewScore}`);
             return true;
         }
-        console.log(`⏸️ No rota: ganancia ${(currentProfit*100).toFixed(2)}% insuficiente para justificar fees`);
+
+        console.log(`⏸️ No rota: ganancia ${(currentProfit * 100).toFixed(2)}% no cubre suficientemente las fees para cambiar`);
         return false;
     }
 
-    // Caso neutral (break-even): ser moderado
-    return (bestNewScore - currentScore) > 25; // 25 puntos de diferencia
+    console.log(`⚖️ Estado neutro, se requiere al menos ${config.rotationThreshold}pts de ventaja`);
+    return scoreDelta >= config.rotationThreshold;
 }
 
 

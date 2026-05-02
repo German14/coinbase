@@ -79,14 +79,14 @@ export class TradingBot {
 
       if (this.currentHolding) {
         // Verificar si la moneda actual está en el watchlist válido
-        const isValidHolding = this.validWatchlist.includes(`${this.currentHolding}-USDC`);
+        const isValidHolding = this.validWatchlist.includes(this.currentHolding);
 
         if (!isValidHolding) {
-          logger.error(`\n🚨 MONEDA ILEGÍTIMA DETECTADA: ${this.currentHolding}`);
-          logger.error(`   Esta moneda no está en el watchlist válido o no existe en Coinbase`);
+          logger.error(`\n🚨 PAR ILEGÍTIMO DETECTADO: ${this.currentHolding}`);
+          logger.error(`   Este par no está en el watchlist válido o no existe en Coinbase`);
           logger.error(`   Vendiendo automáticamente para liberar capital...`);
 
-          const symbol = this.currentHolding;
+          const symbol = this.currentHolding.split('-')[0];
           const balance = await this.exchange.getBalance(symbol);
 
           if (balance > 0) {
@@ -127,27 +127,111 @@ export class TradingBot {
     const usdcAccount = balances.find((b) => b.currency === "USDC");
     const usdcBalance = usdcAccount ? usdcAccount.availableBalance : 0;
     logger.info(`💵 Saldo USDC detectado: $${usdcBalance}`);
-    // Filtro de seguridad: ignoramos saldos menores a $1 para no detectar "basura"
-    const holding = balances.find(
+
+    // 🧹 LIMPIAR POLVO CRIPTOGRÁFICO - Solo vender MICRO cantidades (< $0.50)
+    const dustThreshold = 0.5; // Solo < $0.50 es considerado polvo irrelevante
+    const minHolding = 1.5; // Posiciones mínimas (tracking de holdings activos)
+
+    for (const balance of balances) {
+      if (balance.currency === "USDC" || balance.availableBalance <= 0) continue;
+
+      try {
+        const price = await this.exchange.getPrice(`${balance.currency}-USDC`);
+        const valueInUsd = balance.availableBalance * price;
+
+        if (valueInUsd > 0 && valueInUsd < dustThreshold) {
+          // SOLO vender si es polvo real (< $0.50)
+          logger.warn(`\n🧹 POLVO REAL DETECTADO: ${balance.currency}`);
+          logger.warn(`   Cantidad: ${balance.availableBalance.toFixed(8)}`);
+          logger.warn(`   Valor: $${valueInUsd.toFixed(2)} (< $${dustThreshold})`);
+          logger.warn(`   Vendiendo para liberar USDC...`);
+
+          await this.exchange.marketSell(`${balance.currency}-USDC`, balance.availableBalance);
+          this.tracker.recordSell(
+            `${balance.currency}-USDC`,
+            balance.availableBalance,
+            price,
+            0,
+            'LIMPIEZA DE POLVO CRIPTOGRÁFICO'
+          );
+          logger.success(`✅ Polvo de ${balance.currency} convertido a USDC`);
+        }
+      } catch (error: any) {
+        logger.warn(`⚠️  Error limpiando ${balance.currency}: ${error.message}`);
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    // Volver a obtener balances después de limpiar polvo
+    const updatedBalances = await this.exchange.getBalances();
+    const updatedUsdc = updatedBalances.find((b) => b.currency === "USDC");
+    const updatedUsdcBalance = updatedUsdc ? updatedUsdc.availableBalance : 0;
+
+    if (updatedUsdcBalance > usdcBalance) {
+      logger.success(`\n💚 POLVO LIMPIADO: +$${(updatedUsdcBalance - usdcBalance).toFixed(2)} USDC liberado`);
+    }
+
+    // 📊 DETECTAR POSICIONES ACTIVAS - Holdings > $1.50 (TODAS)
+    const holdings = updatedBalances.filter(
       (b) => b.currency !== "USDC" && b.availableBalance > 0.1,
     );
 
-    if (holding) {
-      const currentPrice = await this.exchange.getPrice(
-        `${holding.currency}-USDC`,
-      );
-      const valueInUsd = holding.availableBalance * currentPrice;
-
-      if (valueInUsd > 1.5) {
-        // Si tenemos más de $1.50 de una moneda
-        if (this.currentHolding !== holding.currency) {
-          this.currentHolding = holding.currency;
-          this.buyPrice = currentPrice;
-          this.highestPrice = currentPrice;
-          logger.info(
-            `📦 Detectado en cartera: ${this.currentHolding} (Valor: $${valueInUsd.toFixed(2)})`,
-          );
+    // Si hay múltiples posiciones, seleccionar la más grande en valor para gestión principal
+    // pero no consolidar - permitir que el bot tenga varias posiciones al mismo tiempo
+    if (holdings.length > 0) {
+      const holdingsWithValue: Array<{
+        currency: string;
+        availableBalance: number;
+        price: number;
+        valueInUsd: number;
+        pair: string;
+      }> = [];
+      for (const h of holdings) {
+        try {
+          const pair = `${h.currency}-USDC`;
+          const price = await this.exchange.getPrice(pair);
+          holdingsWithValue.push({
+            currency: h.currency,
+            availableBalance: h.availableBalance,
+            price,
+            valueInUsd: h.availableBalance * price,
+            pair,
+          });
+        } catch (error: any) {
+          logger.warn(`⚠️  No se pudo obtener precio para ${h.currency}: ${error.message}`);
         }
+      }
+
+      if (holdingsWithValue.length === 0) {
+        logger.warn('⚠️  No se pudieron validar los precios de ninguna posición activa. No se actualizará currentHolding.');
+        this.currentHolding = null;
+        return;
+      }
+
+      const mainHolding = holdingsWithValue.sort((a, b) => b.valueInUsd - a.valueInUsd)[0];
+      const valueInUsd = mainHolding.valueInUsd;
+
+      if (valueInUsd > minHolding) {
+        if (this.currentHolding !== mainHolding.pair) {
+          this.currentHolding = mainHolding.pair;
+          this.buyPrice = mainHolding.price;
+          this.highestPrice = mainHolding.price;
+
+          if (holdingsWithValue.length > 1) {
+            logger.warn(`\n📊 MÚLTIPLES POSICIONES DETECTADAS: ${holdingsWithValue.length}`);
+            for (const h of holdingsWithValue) {
+              logger.info(`   • ${h.pair}: ${h.availableBalance.toFixed(8)} @ $${h.price.toFixed(6)} = $${h.valueInUsd.toFixed(2)}`);
+            }
+            logger.warn(`   Gestionando principalmente: ${this.currentHolding}`);
+          } else {
+            logger.warn(
+              `\n📦 POSICIÓN DETECTADA: ${this.currentHolding} (Valor: $${valueInUsd.toFixed(2)})`,
+            );
+          }
+        }
+      } else if (valueInUsd > 0 && valueInUsd < minHolding) {
+        logger.info(`\n⚠️  Posición pequeña detectada: ${mainHolding.pair} = $${valueInUsd.toFixed(2)}`);
+        this.currentHolding = null;
       } else {
         this.currentHolding = null;
       }
@@ -188,29 +272,37 @@ async managePosition(): Promise<void> {
             logger.info(`   ✓ Score moneda actual: ${currentScore}`);
             logger.info(`   ✓ Diferencia de score: ${(bestOpportunity.finalScore - currentScore).toFixed(2)} puntos`);
 
+            const scoreDelta = bestOpportunity.finalScore - currentScore;
+            const totalFees = config.minProfitFees;
+            const netProfitAfterFees = profitPct - totalFees / 100;
             const urgent = this.riskManager.needsUrgentRebalance(
                 profitPct,
                 currentScore,
                 bestOpportunity.finalScore
             );
+            const rotationWorthIt = this.riskManager.isRotationWorthIt(
+                currentPrice,
+                bestOpportunity.finalScore,
+                currentScore
+            );
+            const shouldRotate = urgent || rotationWorthIt;
 
             logger.warn(`\n🚨 ¿ES REBALANCEO URGENTE? ${urgent ? '✅ SÍ' : '❌ NO'}`);
-            logger.info(`   Ganancia actual: ${(profitPct*100).toFixed(2)}%`);
-            const totalFees = config.minProfitFees;
-            const netProfitAfterFees = profitPct - (totalFees / 100);
-            logger.info(`   Ganancia neta después de fees (${totalFees}%): ${(netProfitAfterFees*100).toFixed(2)}%`);
+            logger.info(`   Ganancia actual: ${(profitPct * 100).toFixed(2)}%`);
+            logger.info(`   Ganancia neta después de fees (${totalFees}%): ${(netProfitAfterFees * 100).toFixed(2)}%`);
+            logger.info(`   Diferencia de score: ${scoreDelta.toFixed(2)} puntos`);
             logger.info(`   📊 CONDICIONES DE ROTACIÓN:`);
-            logger.info(`   • En pérdida neta: ${netProfitAfterFees < 0 ? '✅' : '❌'} (rota con +10pts diferencia)`);
-            logger.info(`   • En ganancia: ${profitPct > 0 ? '✅' : '❌'} (rota solo con +40pts o actual<40/mejor>80)`);
-            logger.info(`   • Break-even: diferencia ${(bestOpportunity.finalScore - currentScore).toFixed(1)}pts ${((bestOpportunity.finalScore - currentScore) > 25) ? '✅ (>25pts)' : '❌ (≤25pts)'}`);
+            logger.info(`   • Score actual: ${currentScore}`);
+            logger.info(`   • Mejor alternativa: ${bestOpportunity.finalScore}`);
+            logger.info(`   • Threshold de rotación: ${config.rotationThreshold} pts`);
+            logger.info(`   • Net profit after fees suficiente: ${netProfitAfterFees >= 0 ? '✅' : '❌'}`);
+            logger.info(`   • Rotación rentable según riesgo: ${rotationWorthIt ? '✅' : '❌'}`);
 
-            if (urgent) {
+            if (shouldRotate) {
                 console.info(`🚨 REBALANCEO: Rotando ${this.currentHolding} -> ${bestOpportunity.pair}`);
 
-                // Vender la posición actual usando executeSell
                 await this.executeSell();
 
-                // 2. COMPRAR: La nueva oportunidad
                 if (bestOpportunity.finalScore >= 80 && bestOpportunity.rsi < 70) {
                     const usdcBalance = await this.exchange.getBalance('USDC');
                     if (usdcBalance > 0) {
@@ -220,8 +312,8 @@ async managePosition(): Promise<void> {
                     }
                 }
             } else {
-                logger.info(`\n⏸️  NO ES URGENTE ROTAR - Manteniendo posición actual`);
-                logger.info(`   La moneda actual está relativamente bien`);
+                logger.info(`\n⏸️  NO ES RENTABLE ROTAR - Manteniendo posición actual`);
+                logger.info(`   El cambio no compensa las comisiones y la diferencia de score`);
             }
         } else {
             logger.info(`\n⏸️  No hay mejor alternativa - Moneda actual es la mejor`);
@@ -252,11 +344,20 @@ async managePosition(): Promise<void> {
 }
   private async evaluateNewEntry(topTarget: any) {
     const availableUSDC = await this.exchange.getBalance("USDC");
-    if (availableUSDC > 2 && topTarget.finalScore >= config.minSignalScore) {
+    const minBuyAmount = 1.5; // Mínimo para operar ($1.50)
+
+    if (availableUSDC < minBuyAmount) {
+      logger.warn(`\n💸 Capital insuficiente: $${availableUSDC.toFixed(2)} < $${minBuyAmount} mínimo`);
+      return;
+    }
+
+    if (topTarget.finalScore >= config.minSignalScore) {
       logger.success(
-        `🚀 Comprando: ${topTarget.pair} (Score: ${topTarget.finalScore})`,
+        `🚀 Comprando: ${topTarget.pair} (Score: ${topTarget.finalScore}) con $${availableUSDC.toFixed(2)}`
       );
       await this.executeBuy(topTarget.pair, availableUSDC);
+    } else {
+      logger.info(`⏸️  Mejor oportunidad tiene score ${topTarget.finalScore}, mínimo requerido: ${config.minSignalScore}`);
     }
   }
 
@@ -363,10 +464,13 @@ async getBitcoinContext() {
       logger.info(`💰 COMPRA: $${usdAmount.toFixed(2)} | Fees estimados: $${estimatedFees.toFixed(2)} | Usando: $${amountToUse.toFixed(2)}`);
 
       const res: any = await this.exchange.marketBuy(pair, amountToUse);
-      this.currentHolding = pair.split("-")[0];
+      this.currentHolding = pair;
       this.buyPrice = Number(res.averagePrice || res.price || 0);
       this.buyAmount = Number(res.filledSize || 0);
       this.highestPrice = this.buyPrice;
+
+      // Registrar posición en riesgo para valorar la rotación correctamente
+      this.riskManager.openTrade(pair, this.buyPrice, this.buyAmount, amountToUse);
 
       // Registrar en tracker con fees reales
       const actualFees = usdAmount - (this.buyAmount * this.buyPrice);
@@ -381,8 +485,9 @@ async getBitcoinContext() {
   private async executeSell() {
     if (!this.currentHolding) return;
     try {
-      const pair = `${this.currentHolding}-USDC`;
-      const amount = await this.exchange.getBalance(this.currentHolding);
+      const pair = this.currentHolding;
+      const symbol = pair.split('-')[0];
+      const amount = await this.exchange.getBalance(symbol);
       // Truncar a 6 decimales para evitar errores de precisión en la API
       const safeAmount = Math.floor(amount * 1000000) / 1000000;
 
@@ -393,15 +498,16 @@ async getBitcoinContext() {
         const expectedValue = safeAmount * sellPrice;
         const estimatedFees = expectedValue * (config.minProfitFees / 100);
 
-        logger.info(`💸 VENTA: ${safeAmount.toFixed(8)} ${this.currentHolding} | Precio: $${sellPrice.toFixed(6)}`);
+        logger.info(`💸 VENTA: ${safeAmount.toFixed(8)} ${symbol} | Precio: $${sellPrice.toFixed(6)}`);
         logger.info(`   Valor esperado: $${expectedValue.toFixed(2)} | Fees estimados: $${estimatedFees.toFixed(2)}`);
 
         await this.exchange.marketSell(pair, safeAmount);
-        logger.success(`💰 Venta de ${this.currentHolding} completada.`);
+        logger.success(`💰 Venta de ${symbol} completada.`);
 
         // Registrar en tracker con fees
         this.tracker.recordSell(pair, safeAmount, sellPrice, estimatedFees, 'Salida de posición');
         this.tracker.getSummary();
+        this.riskManager.closeTrade();
 
         this.currentHolding = null;
       }

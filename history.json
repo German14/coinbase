@@ -24,6 +24,61 @@
   },
   {
     "date": "2026-05-02",
-    "totalValue": 17.692398037750003
+    "totalValue": 18.260595846595
+  },
+  {
+    "id": "buy-1777682111583-0.2850839383641883",
+    "type": "BUY",
+    "pair": "BTC-USDC",
+    "amount": 0.00021055,
+    "price": 78298.28,
+    "totalValue": 16.485702854,
+    "fee": 0.49370518375000216,
+    "timestamp": "2026-05-02T00:35:11.583Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777715541171-0.35555906401970194",
+    "type": "SELL",
+    "pair": "APT-USDC",
+    "amount": 0.001,
+    "price": 1.0021,
+    "totalValue": 0.0010021,
+    "fee": 0,
+    "timestamp": "2026-05-02T09:52:21.171Z",
+    "reason": "LIMPIEZA DE POLVO CRIPTOGRÁFICO"
+  },
+  {
+    "id": "buy-1777715615008-0.41087202106747744",
+    "type": "BUY",
+    "pair": "GRT-USDC",
+    "amount": 72.38,
+    "price": 0.0244,
+    "totalValue": 1.766072,
+    "fee": 0.05721533809500001,
+    "timestamp": "2026-05-02T09:53:35.008Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777717431470-0.25231646071419167",
+    "type": "SELL",
+    "pair": "GRT-USDC",
+    "amount": 72.38,
+    "price": 0.0243,
+    "totalValue": 1.7588339999999998,
+    "fee": 0.038694347999999996,
+    "timestamp": "2026-05-02T10:23:51.470Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "id": "buy-1777717728032-0.7007404730749025",
+    "type": "BUY",
+    "pair": "ETH-USDC",
+    "amount": 0.00075066,
+    "price": 2304.13,
+    "totalValue": 1.7296182258000001,
+    "fee": 0.05999431729499993,
+    "timestamp": "2026-05-02T10:28:48.032Z",
+    "reason": "Entrada en tendencia"
   }
 ]
