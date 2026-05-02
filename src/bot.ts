@@ -4,19 +4,50 @@ import { Indicators } from "./indicators";
 import { config } from "./config";
 import { logger } from "./logger";
 import { RiskManager } from "./risk";
+import { TransactionTracker } from "./transactionTracker";
 
 export class TradingBot {
   private exchange: CoinbaseClient;
   private ai: SentimentAnalyzer;
   private currentHolding: string | null = null;
   private buyPrice: number = 0;
+  private buyAmount: number = 0;
   private highestPrice: number = 0;
   private isRotating: boolean = false;
   private riskManager: RiskManager = new RiskManager();
+  private tracker: TransactionTracker = new TransactionTracker();
+  private validWatchlist: string[] = [];
 
   constructor() {
     this.exchange = new CoinbaseClient();
     this.ai = new SentimentAnalyzer();
+    this.initializeWatchlist();
+  }
+
+  private async initializeWatchlist() {
+    logger.info(`\n🔍 VALIDANDO WATCHLIST INICIAL...`);
+    this.validWatchlist = [];
+    
+    for (const pair of config.watchlist) {
+      try {
+        const price = await this.exchange.getPrice(pair);
+        if (price && price > 0) {
+          this.validWatchlist.push(pair);
+          logger.success(`   ✅ ${pair}: $${price.toFixed(2)}`);
+        } else {
+          logger.warn(`   ❌ ${pair}: Precio inválido`);
+        }
+      } catch (error) {
+        logger.warn(`   ❌ ${pair}: NO DISPONIBLE en Coinbase`);
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    logger.info(`\n✨ Watchlist válida: ${this.validWatchlist.length}/${config.watchlist.length} monedas`);
+    if (this.validWatchlist.length === 0) {
+      logger.error(`❌ ERROR: Ninguna moneda del watchlist está disponible`);
+      process.exit(1);
+    }
   }
 
   async runCycle() {
@@ -44,10 +75,18 @@ export class TradingBot {
         `🔝 Mejor oportunidad: ${topTarget.pair} (Score: ${topTarget.finalScore})`,
       );
 
-      console.log('holding',this.currentHolding)
+      console.log('📍 Estado actual - Holding:', this.currentHolding || 'NINGUNO', '| USDC Disponible: TODO EL ANÁLISIS ABAJO');
+      
       if (this.currentHolding) {
-        await this.managePosition(topTarget);
+        logger.warn(`\n🔄 MANEJO DE POSICIÓN ABIERTA`);
+        logger.warn(`   Moneda actual: ${this.currentHolding}`);
+        logger.warn(`   Precio de compra: $${this.buyPrice.toFixed(6)}`);
+        logger.warn(`   Cantidad: ${this.buyAmount.toFixed(8)}`);
+        await this.managePosition();
       } else {
+        logger.info(`\n💚 SIN POSICIÓN ABIERTA - Evaluando entrada`);
+        logger.info(`   Mejor score encontrado: ${topTarget.pair} = ${topTarget.finalScore}`);
+        logger.info(`   Score mínimo requerido: ${config.minSignalScore}`);
         await this.evaluateNewEntry(topTarget);
       }
 
@@ -91,82 +130,111 @@ export class TradingBot {
     }
   }
 
-  private async managePosition(topTarget: any) {
-    // 1. Validar que tenemos una posición cargada en el RiskManager
-    const position = this.riskManager.getOpenPosition();
-    if (!position) return;
+async managePosition(): Promise<void> {
+    if (!this.currentHolding) return;
 
-    const currentPair = position.productId; // Ya incluye el '-USDC'
-    const currentAnalysis = await this.getSpecificAnalysis(currentPair);
-
-    if (!currentAnalysis) return;
-
-    // 2. Cálculo de PnL real
-    const { pnlPercent } = this.riskManager.getPnL(currentAnalysis.price);
-
-    // 3. Verificación de Stop Loss / Take Profit (Salidas de emergencia)
-    // Usamos los valores guardados en la posición, no en 'this'
-    if (
-      currentAnalysis.price <= position.stopLoss ||
-      currentAnalysis.price >= position.takeProfit
-    ) {
-      logger.warn(`⚠️ Salida forzada para ${currentPair} (SL/TP alcanzado)`);
-      await this.executeSell();
-      return;
-    }
-
-    // 4. LÓGICA DE ROTACIÓN PROTEGIDA
-    if (topTarget.pair !== currentPair) {
-      const advantage = topTarget.finalScore - currentAnalysis.finalScore;
-// LOG DE DIAGNÓSTICO INICIAL
-logger.info(`⚖️ Comparando: ${currentPair} (${currentAnalysis.finalScore}) vs ${topTarget.pair} (${topTarget.finalScore})`);
-logger.info(`   • Ventaja calculada: ${advantage} puntos`);
-      logger.info(`   • Umbral requerido (rotationThreshold): ${config.rotationThreshold} puntos`);
-
-      // Filtro 1: ¿Ya cubrimos las comisiones? (Tu 2.2% de config)
-      const hasCoveredFees = pnlPercent > config.minProfitFees;
-
-      // Filtro 2: ¿La nueva oportunidad es una "Super Señal" que solventa la pérdida?
-      const isPowerfulSignal =
-        topTarget.finalScore >= 85 && advantage > config.rotationThreshold + 15;
-
-      // Filtro 3: Validación Técnica (EMA y RSI)
-      const isTechnicalValid =
-        topTarget.trend === "Tendencia Alcista" && topTarget.rsi < 65;
-
-      if (
-        (hasCoveredFees || isPowerfulSignal) &&
-        isTechnicalValid &&
-        advantage >= config.rotationThreshold
-      ) {
-        logger.warn(
-          `🔄 Rotación validada: De ${currentPair} a ${topTarget.pair}`,
-        );
-        logger.info(
-          `📊 PnL Actual: ${pnlPercent.toFixed(2)}% | Ventaja IA: +${advantage} puntos`,
-        );
-
-        this.isRotating = true; // Bloqueamos el ciclo
-        await this.executeSell();
-        this.isRotating = false;
-      } else {
-        // Si no cumple, imprimimos por qué se queda quieto (útil para debug)
-        if (advantage >= config.rotationThreshold) {
-          logger.info(
-            `🚫 Rotación denegada por costos: PnL (${pnlPercent.toFixed(2)}%) < Fees (${config.minProfitFees}%)`,
-          );
+    try {
+      const candles = await this.exchange.getCandles(this.currentHolding);
+      // --- VALIDACIÓN ANTIFALLO ---
+        if (!candles || candles.length === 0) {
+            console.error(`No se obtuvieron velas para ${this.currentHolding}. Reintentando en el próximo ciclo...`);
+            return;
         }
-      }
-      logger.info(`📊 Estado de ${currentPair}:`);
-      logger.info(`   • Precio Actual: $${currentAnalysis.price}`);
-      logger.info(`   • PnL Bruto: ${pnlPercent.toFixed(2)}%`);
-      logger.info(`   • Umbral de Fees: ${config.minProfitFees}%`);
-      logger.info(
-        `   • RSI: ${currentAnalysis.rsi} | Score IA: ${currentAnalysis.finalScore}`,
-      );
-    }
-  }
+        const currentPrice = candles[candles.length - 1].close;
+        const profitPct = (currentPrice - this.buyPrice) / this.buyPrice;
 
+        logger.info(`\n💰 PRECIO ACTUAL: $${currentPrice.toFixed(6)} | GANANCIA: ${(profitPct*100).toFixed(2)}%`);
+
+        // --- REBALANCEO URGENTE ---
+        const allAnalyses = await this.getAllAnalyses();
+
+        // Ordena correctamente por finalScore
+        const bestOpportunity = allAnalyses.sort((a, b) => b.finalScore - a.finalScore)[0];
+
+        logger.info(`\n📊 ANÁLISIS DE REBALANCEO:`);
+        logger.info(`   Mejor moneda alternativa: ${bestOpportunity.pair} (Score: ${bestOpportunity.finalScore})`);
+        logger.info(`   Moneda actual: ${this.currentHolding} (analizando...)`);
+
+        if (bestOpportunity && bestOpportunity.pair !== this.currentHolding) {
+            const currentAnalysis = await this.getSpecificAnalysis(this.currentHolding);
+            const currentScore = currentAnalysis?.finalScore || 0;
+
+            logger.info(`   ✓ Score moneda actual: ${currentScore}`);
+            logger.info(`   ✓ Diferencia de score: ${(bestOpportunity.finalScore - currentScore).toFixed(2)} puntos`);
+
+            const urgent = this.riskManager.needsUrgentRebalance(
+                profitPct,
+                currentScore,
+                bestOpportunity.finalScore
+            );
+
+            logger.warn(`\n🚨 ¿ES REBALANCEO URGENTE? ${urgent ? '✅ SÍ' : '❌ NO'}`);
+            logger.info(`   Ganancia actual: ${(profitPct*100).toFixed(2)}%`);
+            logger.info(`   Condición 1 - Score actual < 55 Y mejor > 82: ${currentScore < 55 && bestOpportunity.finalScore > 82 ? '✅ SERÍA URGENTE' : '❌ NO'}`);
+            logger.info(`   Condición 2 - Pérdida > 2% Y diferencia > 15 pts: ${profitPct < -0.02 && (bestOpportunity.finalScore - currentScore) > 15 ? '✅ SERÍA URGENTE' : '❌ NO'}`);
+
+            if (urgent) {
+                console.info(`🚨 REBALANCEO: Rotando ${this.currentHolding} -> ${bestOpportunity.pair}`);
+
+                const symbol = this.currentHolding.split('-')[0];
+                const balance = await this.exchange.getBalance(symbol);
+
+                if (balance > 0) {
+                    const sellPrice = await this.exchange.getPrice(`${this.currentHolding}-USDC`);
+                    await this.exchange.marketSell(`${this.currentHolding}-USDC`, balance);
+                    
+                    // Registrar venta de emergencia
+                    this.tracker.recordSell(`${this.currentHolding}-USDC`, balance, sellPrice, 0, `REBALANCEO URGENTE - Cambio a ${bestOpportunity.pair}`);
+                }
+
+                // 2. COMPRAR: La nueva oportunidad
+                if (bestOpportunity.finalScore >= 80 && bestOpportunity.rsi < 70) {
+                    const usdcBalance = await this.exchange.getBalance('USDC');
+                    if (usdcBalance > 0) {
+                        const buyRes: any = await this.exchange.marketBuy(bestOpportunity.pair, usdcBalance);
+                        const buyAmount = Number(buyRes.filledSize || 0);
+                        const buyPrice = Number(buyRes.averagePrice || bestOpportunity.price || 0);
+                        
+                        // Registrar compra post-rebalanceo
+                        this.tracker.recordBuy(bestOpportunity.pair, buyAmount, buyPrice, 0, 'COMPRA POST-REBALANCEO');
+
+                        this.currentHolding = bestOpportunity.pair.split('-')[0];
+                        this.buyPrice = buyPrice;
+                        this.buyAmount = buyAmount;
+                        return;
+                    }
+                }
+            } else {
+                logger.info(`\n⏸️  NO ES URGENTE ROTAR - Manteniendo posición actual`);
+                logger.info(`   La moneda actual está relativamente bien`);
+            }
+        } else {
+            logger.info(`\n⏸️  No hay mejor alternativa - Moneda actual es la mejor`);
+        }
+        // --- FIN REBALANCEO ---
+
+        // Lógica de salida normal usando tus métodos de venta
+        const currentAnalysis = await this.getSpecificAnalysis(this.currentHolding);
+        const { sell, reason } = this.riskManager.shouldSell(currentPrice);
+        if (sell) {
+            logger.warn(`🛑 VENTA FORZADA - Razón: ${reason} | Precio: $${currentPrice.toFixed(2)}`);
+            const symbol = this.currentHolding.split('-')[0];
+            const balance = await this.exchange.getBalance(symbol);
+            if (balance > 0) {
+                const sellPrice = await this.exchange.getPrice(`${symbol}-USDC`);
+                await this.exchange.marketSell(`${symbol}-USDC`, balance);
+                this.tracker.recordSell(`${symbol}-USDC`, balance, sellPrice, 0, `VENTA AUTOMÁTICA: ${reason}`);
+                this.currentHolding = null;
+            }
+        } else {
+            logger.info(`\n✅ Sin señales de venta - Posición segura`);
+            logger.info(`   Esperando cambios en el mercado...`);
+        }
+
+    } catch (error:any) {
+       console.error("Error en managePosition: " + error.message);
+    }
+}
   private async evaluateNewEntry(topTarget: any) {
     const availableUSDC = await this.exchange.getBalance("USDC");
     if (availableUSDC > 2 && topTarget.finalScore >= config.minSignalScore) {
@@ -179,15 +247,20 @@ logger.info(`   • Ventaja calculada: ${advantage} puntos`);
 
   private async getAllAnalyses() {
     const results = [];
-    for (const pair of config.watchlist) {
+    logger.info(`\n🔍 ANALIZANDO ${this.validWatchlist.length} MONEDAS:`);
+    for (const pair of this.validWatchlist) {
       try {
         const res = await this.getSpecificAnalysis(pair);
         // Solo añadimos si el resultado es un objeto válido y tiene score
         if (res && typeof res === "object" && res.finalScore !== undefined) {
           results.push(res);
+          logger.info(`   📍 ${pair}: SCORE = ${res.finalScore} | RSI = ${res.rsi.toFixed(2)} | Trend = ${res.trend}`);
+        } else {
+          logger.warn(`   ❌ ${pair}: Sin datos`);
         }
       } catch (e) {
         // Ignoramos el error de una moneda individual para no romper el bucle
+        logger.warn(`   ⚠️  ${pair}: Error al analizar`);
         continue;
       }
       await new Promise((r) => setTimeout(r, 2000));
@@ -197,25 +270,33 @@ logger.info(`   • Ventaja calculada: ${advantage} puntos`);
 
   private async getSpecificAnalysis(pair: string) {
     try {
-      // 1. Filtro radical: Si es EUR o algo raro, ni lo intentamos
+      // 1. Validación básica del par
       if (!pair || pair.includes("EUR") || pair.includes("USD-USDC")) {
         return null;
       }
-      const btcContext = await this.getBitcoinContext();
 
-
-      const candles = await this.exchange.getCandles(pair);
-      console.log(
-        `[${pair}] Velas recibidas: ${candles.length} | Primera: ${candles[0].close} | Última: ${candles[candles.length - 1].close}`,
-      );
-      // 2. PROTECCIÓN CRÍTICA: Aquí es donde fallaba.
-      // Verificamos que candles NO sea null y que TENGA contenido antes de usar .length
-      if (!candles || !Array.isArray(candles) || candles.length === 0) {
-        // logger.warn(`[${pair}] Sin datos de velas suficientes.`);
+      // 2. Verificar que el par existe en Coinbase
+      try {
+        const price = await this.exchange.getPrice(pair);
+        if (!price || price <= 0) {
+          logger.warn(`⚠️  ${pair}: Precio inválido ($${price})`);
+          return null;
+        }
+      } catch (error: any) {
+        logger.warn(`⚠️  ${pair}: NO EXISTE en Coinbase o está deshabilitado`);
         return null;
       }
 
-      // 3. Ahora sí es seguro acceder a los índices
+      const btcContext = await this.getBitcoinContext();
+
+      // 3. Obtener velas
+      const candles = await this.exchange.getCandles(pair);
+      if (!candles || !Array.isArray(candles) || candles.length === 0) {
+        logger.warn(`⚠️  ${pair}: Sin datos históricos disponibles`);
+        return null;
+      }
+
+      // 4. Análisis de datos
       const currentPrice = candles[candles.length - 1].close;
       const rsi = Indicators.calculateRSI(candles);
       const emaValue = Indicators.calculateEMA(candles, config.emaPeriod || 20);
@@ -229,19 +310,13 @@ logger.info(`   • Ventaja calculada: ${advantage} puntos`);
         trend,
       },btcContext);
 
-      console.log("tendencia:", pair, trend);
-      console.log("rsi:", rsi);
-      console.log("emaValue:", emaValue);
-      console.log("currentPrice:", currentPrice);
-      console.log("trend:", trend);
-      console.log("score:", score);
       return {
         pair,
         finalScore: score,
-        price: currentPrice, // 👈 CRUCIAL: Necesario para el PnL
-        trend, // 👈 CRUCIAL: Necesario para validar la rotación
+        price: currentPrice,
+        trend,
         rsi,
-        btcRef: btcContext.btcChange24h // Opcional: guardarlo para los logs
+        btcRef: btcContext.btcChange24h
       };
     } catch (error: any) {
       // Si algo falla dentro (como un error 400 de Coinbase),
@@ -270,7 +345,11 @@ async getBitcoinContext() {
       const res: any = await this.exchange.marketBuy(pair, amountToUse);
       this.currentHolding = pair.split("-")[0];
       this.buyPrice = Number(res.averagePrice || res.price || 0);
+      this.buyAmount = Number(res.filledSize || 0);
       this.highestPrice = this.buyPrice;
+      
+      // Registrar en tracker
+      this.tracker.recordBuy(pair, this.buyAmount, this.buyPrice, 0, 'Entrada en tendencia');
     } catch (e: any) {
       logger.error(`❌ Error en compra: ${e.message}`);
     }
@@ -285,8 +364,14 @@ async getBitcoinContext() {
       const safeAmount = Math.floor(amount * 1000000) / 1000000;
 
       if (safeAmount > 0) {
+        const currentPrice = await this.exchange.getPrice(pair);
         await this.exchange.marketSell(pair, safeAmount);
         logger.success(`💰 Venta de ${this.currentHolding} completada.`);
+        
+        // Registrar en tracker
+        this.tracker.recordSell(pair, safeAmount, currentPrice, 0, 'Salida de posición');
+        this.tracker.getSummary();
+        
         this.currentHolding = null;
       }
     } catch (e: any) {

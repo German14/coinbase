@@ -1,4 +1,5 @@
 import { CoinbaseClient } from './coinbase';
+import { TransactionTracker } from './transactionTracker';
 import * as fs from 'fs';
 import { config } from './config';
 
@@ -16,11 +17,13 @@ interface HistoryEntry {
 
 export class BalanceManager {
   private client: CoinbaseClient;
+  private tracker: TransactionTracker;
   private readonly DUST_THRESHOLD = 0.01;
   private readonly historyFile = './history.json';
 
   constructor(client: CoinbaseClient) {
     this.client = client;
+    this.tracker = new TransactionTracker();
   }
 
   private saveToHistory(totalValue: number): HistoryEntry[] {
@@ -99,6 +102,10 @@ export class BalanceManager {
 
       console.log(`${BOLD}  HISTÓRICO TOTAL:    ${totalProfit >= 0 ? GREEN : RED}${totalProfit >= 0 ? '+' : ''}$${totalProfit.toFixed(2)} USDC${RESET}`);
       console.log(`${BOLD}${CYAN}------------------------------------------${RESET}\n`);
+
+      // ===== TRANSACCIONES DETALLADAS =====
+      console.log(`${BOLD}${CYAN}📈 DETALLE DE TRANSACCIONES${RESET}`);
+      this.tracker.getSummary();
 
     } catch (error: any) {
       console.log(`${RED}❌ Error: ${error.message}${RESET}`);

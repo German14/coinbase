@@ -9,6 +9,21 @@
   },
   {
     "date": "2026-05-01",
-    "totalValue": 20.331332915
+    "totalValue": 1.14597880075
+  },
+  {
+    "id": "buy-1777680011921-0.10271795148450091",
+    "type": "BUY",
+    "pair": "ORCA-USDC",
+    "amount": 9.02,
+    "price": 1.996010421286031,
+    "totalValue": 18.004013999999998,
+    "fee": 0,
+    "timestamp": "2026-05-02T00:00:11.921Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "date": "2026-05-02",
+    "totalValue": 18.84317544025
   }
 ]

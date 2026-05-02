@@ -13,6 +13,19 @@ export interface Position {
 
 export class RiskManager {
   private openPosition: Position | null = null;
+  private readonly URGENT_REBALANCE_LOSS_LIMIT = -0.02; // -2%
+
+public needsUrgentRebalance(currentProfit: number, currentScore: number, bestNewScore: number): boolean {
+    // Si la moneda actual tiene un score bajo (< 55) y hay una oportunidad clara (> 82)
+    if (currentScore < 55 && bestNewScore > 82) return true;
+
+    // Si la pérdida es mayor al 2% y la nueva moneda es 15 puntos mejor
+    if (currentProfit < -0.02 && (bestNewScore - currentScore) > 15) return true;
+
+    return false;
+}
+
+
 public getPnL(currentPrice: number) {
   const pos = this.openPosition;
   if (!pos) return { pnlPercent: 0 };

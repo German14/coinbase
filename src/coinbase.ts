@@ -179,6 +179,18 @@ export class CoinbaseClient {
     };
   }
   async getCandles(productId: string): Promise<any[]> {
+    // Primero validamos que el producto existe
+    try {
+      const productInfo = await this.getPrice(productId);
+      if (!productInfo || productInfo <= 0) {
+        console.warn(`⚠️  [CANDLES] Producto ${productId} no tiene precio válido`);
+        return [];
+      }
+    } catch (error: any) {
+      console.warn(`⚠️  [CANDLES] Producto ${productId} NO EXISTE o no está disponible: ${error.message}`);
+      return [];
+    }
+
     // Pedimos 24 horas (86400 seg) para tener ~288 velas de 5 min
     const start = Math.floor(Date.now() / 1000) - 24 * 3600;
     const end = Math.floor(Date.now() / 1000);
@@ -186,9 +198,12 @@ export class CoinbaseClient {
 
     try {
       const data = await this.request<any>("GET", path);
-      if (!data || !data.candles || !Array.isArray(data.candles)) return [];
+      if (!data || !data.candles || !Array.isArray(data.candles)) {
+        console.warn(`⚠️  [CANDLES] No hay datos de velas para ${productId}`);
+        return [];
+      }
 
-      return data.candles
+      const filtered = data.candles
         .map((c: any) => ({
           close: parseFloat(c.close || "0"),
           high: parseFloat(c.high || "0"),
@@ -197,7 +212,14 @@ export class CoinbaseClient {
         }))
         .filter((c: any) => c.close > 0)
         .reverse();
-    } catch (error) {
+
+      if (filtered.length === 0) {
+        console.warn(`⚠️  [CANDLES] ${productId}: Se obtuvieron ${data.candles.length} velas pero todas tienen precio 0`);
+      }
+      
+      return filtered;
+    } catch (error: any) {
+      console.warn(`⚠️  [CANDLES] Error obteniendo velas para ${productId}: ${error.message}`);
       return [];
     }
   }
