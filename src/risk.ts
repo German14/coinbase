@@ -16,13 +16,36 @@ export class RiskManager {
   private readonly URGENT_REBALANCE_LOSS_LIMIT = -0.02; // -2%
 
 public needsUrgentRebalance(currentProfit: number, currentScore: number, bestNewScore: number): boolean {
-    // Si la moneda actual tiene un score bajo (< 55) y hay una oportunidad clara (> 82)
-    if (currentScore < 55 && bestNewScore > 82) return true;
+    // 🔥 REBALANCEO MÁS AGRESIVO PERO CON COMISIONES 🔥
 
-    // Si la pérdida es mayor al 2% y la nueva moneda es 15 puntos mejor
-    if (currentProfit < -0.02 && (bestNewScore - currentScore) > 15) return true;
+    // Primero: Verificar si las comisiones valen la pena
+    const totalFees = config.minProfitFees; // 2.2%
+    const netProfitAfterFees = currentProfit - (totalFees / 100);
 
-    return false;
+    // Si estamos en pérdida neta después de fees, cualquier mejora vale la pena
+    if (netProfitAfterFees < 0) {
+        console.log(`💸 En pérdida neta (${(netProfitAfterFees*100).toFixed(2)}% después de fees), rota si hay mejora`);
+        return (bestNewScore - currentScore) > 10; // Solo 10 puntos de diferencia mínima
+    }
+
+    // Si estamos en ganancia, ser más selectivo
+    if (currentProfit > 0) {
+        // Solo rota si la diferencia es muy grande (compensará las fees)
+        if ((bestNewScore - currentScore) > 40) {
+            console.log(`🚀 Rotación justificada: diferencia ${(bestNewScore - currentScore)}pts > 40pts`);
+            return true;
+        }
+        // O si la nueva es excelente y la actual pésima
+        if (currentScore < 40 && bestNewScore > 80) {
+            console.log(`🔥 Rotación justificada: actual pésima (${currentScore}) vs excelente (${bestNewScore})`);
+            return true;
+        }
+        console.log(`⏸️ No rota: ganancia ${(currentProfit*100).toFixed(2)}% insuficiente para justificar fees`);
+        return false;
+    }
+
+    // Caso neutral (break-even): ser moderado
+    return (bestNewScore - currentScore) > 25; // 25 puntos de diferencia
 }
 
 

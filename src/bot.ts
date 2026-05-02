@@ -27,7 +27,7 @@ export class TradingBot {
   private async initializeWatchlist() {
     logger.info(`\n🔍 VALIDANDO WATCHLIST INICIAL...`);
     this.validWatchlist = [];
-    
+
     for (const pair of config.watchlist) {
       try {
         const price = await this.exchange.getPrice(pair);
@@ -76,8 +76,34 @@ export class TradingBot {
       );
 
       console.log('📍 Estado actual - Holding:', this.currentHolding || 'NINGUNO', '| USDC Disponible: TODO EL ANÁLISIS ABAJO');
-      
+
       if (this.currentHolding) {
+        // Verificar si la moneda actual está en el watchlist válido
+        const isValidHolding = this.validWatchlist.includes(`${this.currentHolding}-USDC`);
+
+        if (!isValidHolding) {
+          logger.error(`\n🚨 MONEDA ILEGÍTIMA DETECTADA: ${this.currentHolding}`);
+          logger.error(`   Esta moneda no está en el watchlist válido o no existe en Coinbase`);
+          logger.error(`   Vendiendo automáticamente para liberar capital...`);
+
+          const symbol = this.currentHolding;
+          const balance = await this.exchange.getBalance(symbol);
+
+          if (balance > 0) {
+            try {
+              const sellPrice = await this.exchange.getPrice(`${symbol}-USDC`);
+              await this.exchange.marketSell(`${symbol}-USDC`, balance);
+              this.tracker.recordSell(`${symbol}-USDC`, balance, sellPrice, 0, 'VENTA AUTOMÁTICA - Moneda no válida');
+              logger.success(`✅ Vendida ${symbol} automáticamente`);
+            } catch (error: any) {
+              logger.error(`❌ Error vendiendo ${symbol}: ${error.message}`);
+            }
+          }
+
+          this.currentHolding = null;
+          return; // Salir del ciclo para que en el próximo pueda comprar algo válido
+        }
+
         logger.warn(`\n🔄 MANEJO DE POSICIÓN ABIERTA`);
         logger.warn(`   Moneda actual: ${this.currentHolding}`);
         logger.warn(`   Precio de compra: $${this.buyPrice.toFixed(6)}`);
@@ -170,37 +196,26 @@ async managePosition(): Promise<void> {
 
             logger.warn(`\n🚨 ¿ES REBALANCEO URGENTE? ${urgent ? '✅ SÍ' : '❌ NO'}`);
             logger.info(`   Ganancia actual: ${(profitPct*100).toFixed(2)}%`);
-            logger.info(`   Condición 1 - Score actual < 55 Y mejor > 82: ${currentScore < 55 && bestOpportunity.finalScore > 82 ? '✅ SERÍA URGENTE' : '❌ NO'}`);
-            logger.info(`   Condición 2 - Pérdida > 2% Y diferencia > 15 pts: ${profitPct < -0.02 && (bestOpportunity.finalScore - currentScore) > 15 ? '✅ SERÍA URGENTE' : '❌ NO'}`);
+            const totalFees = config.minProfitFees;
+            const netProfitAfterFees = profitPct - (totalFees / 100);
+            logger.info(`   Ganancia neta después de fees (${totalFees}%): ${(netProfitAfterFees*100).toFixed(2)}%`);
+            logger.info(`   📊 CONDICIONES DE ROTACIÓN:`);
+            logger.info(`   • En pérdida neta: ${netProfitAfterFees < 0 ? '✅' : '❌'} (rota con +10pts diferencia)`);
+            logger.info(`   • En ganancia: ${profitPct > 0 ? '✅' : '❌'} (rota solo con +40pts o actual<40/mejor>80)`);
+            logger.info(`   • Break-even: diferencia ${(bestOpportunity.finalScore - currentScore).toFixed(1)}pts ${((bestOpportunity.finalScore - currentScore) > 25) ? '✅ (>25pts)' : '❌ (≤25pts)'}`);
 
             if (urgent) {
                 console.info(`🚨 REBALANCEO: Rotando ${this.currentHolding} -> ${bestOpportunity.pair}`);
 
-                const symbol = this.currentHolding.split('-')[0];
-                const balance = await this.exchange.getBalance(symbol);
-
-                if (balance > 0) {
-                    const sellPrice = await this.exchange.getPrice(`${this.currentHolding}-USDC`);
-                    await this.exchange.marketSell(`${this.currentHolding}-USDC`, balance);
-                    
-                    // Registrar venta de emergencia
-                    this.tracker.recordSell(`${this.currentHolding}-USDC`, balance, sellPrice, 0, `REBALANCEO URGENTE - Cambio a ${bestOpportunity.pair}`);
-                }
+                // Vender la posición actual usando executeSell
+                await this.executeSell();
 
                 // 2. COMPRAR: La nueva oportunidad
                 if (bestOpportunity.finalScore >= 80 && bestOpportunity.rsi < 70) {
                     const usdcBalance = await this.exchange.getBalance('USDC');
                     if (usdcBalance > 0) {
-                        const buyRes: any = await this.exchange.marketBuy(bestOpportunity.pair, usdcBalance);
-                        const buyAmount = Number(buyRes.filledSize || 0);
-                        const buyPrice = Number(buyRes.averagePrice || bestOpportunity.price || 0);
-                        
-                        // Registrar compra post-rebalanceo
-                        this.tracker.recordBuy(bestOpportunity.pair, buyAmount, buyPrice, 0, 'COMPRA POST-REBALANCEO');
-
-                        this.currentHolding = bestOpportunity.pair.split('-')[0];
-                        this.buyPrice = buyPrice;
-                        this.buyAmount = buyAmount;
+                        logger.info(`\n💰 EJECUTANDO RECOMPRA: ${bestOpportunity.pair} con $${usdcBalance.toFixed(2)} USDC`);
+                        await this.executeBuy(bestOpportunity.pair, usdcBalance);
                         return;
                     }
                 }
@@ -341,15 +356,23 @@ async getBitcoinContext() {
 }
   private async executeBuy(pair: string, usdAmount: number) {
     try {
-      const amountToUse = usdAmount * 0.98; // Reservar 2% para fees
+      // Calcular fees de manera más inteligente
+      const estimatedFees = usdAmount * (config.minProfitFees / 100); // 2.2%
+      const amountToUse = usdAmount - estimatedFees;
+
+      logger.info(`💰 COMPRA: $${usdAmount.toFixed(2)} | Fees estimados: $${estimatedFees.toFixed(2)} | Usando: $${amountToUse.toFixed(2)}`);
+
       const res: any = await this.exchange.marketBuy(pair, amountToUse);
       this.currentHolding = pair.split("-")[0];
       this.buyPrice = Number(res.averagePrice || res.price || 0);
       this.buyAmount = Number(res.filledSize || 0);
       this.highestPrice = this.buyPrice;
-      
-      // Registrar en tracker
-      this.tracker.recordBuy(pair, this.buyAmount, this.buyPrice, 0, 'Entrada en tendencia');
+
+      // Registrar en tracker con fees reales
+      const actualFees = usdAmount - (this.buyAmount * this.buyPrice);
+      this.tracker.recordBuy(pair, this.buyAmount, this.buyPrice, actualFees, 'Entrada en tendencia');
+
+      logger.success(`✅ Compra ejecutada: ${this.buyAmount.toFixed(8)} ${this.currentHolding} @ $${this.buyPrice.toFixed(6)}`);
     } catch (e: any) {
       logger.error(`❌ Error en compra: ${e.message}`);
     }
@@ -364,14 +387,22 @@ async getBitcoinContext() {
       const safeAmount = Math.floor(amount * 1000000) / 1000000;
 
       if (safeAmount > 0) {
-        const currentPrice = await this.exchange.getPrice(pair);
+        const sellPrice = await this.exchange.getPrice(pair);
+
+        // Calcular valor esperado vs fees
+        const expectedValue = safeAmount * sellPrice;
+        const estimatedFees = expectedValue * (config.minProfitFees / 100);
+
+        logger.info(`💸 VENTA: ${safeAmount.toFixed(8)} ${this.currentHolding} | Precio: $${sellPrice.toFixed(6)}`);
+        logger.info(`   Valor esperado: $${expectedValue.toFixed(2)} | Fees estimados: $${estimatedFees.toFixed(2)}`);
+
         await this.exchange.marketSell(pair, safeAmount);
         logger.success(`💰 Venta de ${this.currentHolding} completada.`);
-        
-        // Registrar en tracker
-        this.tracker.recordSell(pair, safeAmount, currentPrice, 0, 'Salida de posición');
+
+        // Registrar en tracker con fees
+        this.tracker.recordSell(pair, safeAmount, sellPrice, estimatedFees, 'Salida de posición');
         this.tracker.getSummary();
-        
+
         this.currentHolding = null;
       }
     } catch (e: any) {
