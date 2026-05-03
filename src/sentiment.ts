@@ -8,8 +8,8 @@ if (!globalThis.fetch) {
   (globalThis as any).Request = fetch.Request;
   (globalThis as any).Response = fetch.Response;
   if (!(globalThis as any).FormData) {
-        (globalThis as any).FormData = class FormData {};
-    }
+    (globalThis as any).FormData = class FormData {};
+  }
 }
 export class SentimentAnalyzer {
   private groq: Groq;
@@ -25,8 +25,8 @@ export class SentimentAnalyzer {
    */
   async analyzeWithGroq(
     pair: string,
-    data: { rsi: number; price: number; trend: string },
-    btcContext: any
+    data: { rsi: number; price: number; trend: string; macd: any  },
+    btcContext: any,
   ): Promise<number> {
     try {
       const prompt = `
