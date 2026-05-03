@@ -10,6 +10,7 @@ async function start() {
     validateConfig();
 
     const bot = new TradingBot();
+    await bot.initialize(); // esperar a que valide las 23 monedas
     const exchange = new CoinbaseClient();
 
     // 1. Obtenemos TODOS los balances de la cuenta

@@ -90,9 +90,6 @@ export class CoinbaseClient {
       "GET",
       "/api/v3/brokerage/accounts",
     );
-
-    // ESTO TE DIRÁ QUÉ PASA:
-    console.log("--- COINBASE RESPONDE ---");
     data.accounts.forEach((a) => {
       if (
         parseFloat(a.available_balance.value) > 0 ||
@@ -216,7 +213,7 @@ export class CoinbaseClient {
       if (filtered.length === 0) {
         console.warn(`⚠️  [CANDLES] ${productId}: Se obtuvieron ${data.candles.length} velas pero todas tienen precio 0`);
       }
-      
+
       return filtered;
     } catch (error: any) {
       console.warn(`⚠️  [CANDLES] Error obteniendo velas para ${productId}: ${error.message}`);

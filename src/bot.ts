@@ -21,10 +21,12 @@ export class TradingBot {
   constructor() {
     this.exchange = new CoinbaseClient();
     this.ai = new SentimentAnalyzer();
-    this.initializeWatchlist();
+
     this.riskManager.loadPosition();
   }
-
+  async initialize(): Promise<void> {
+    await this.initializeWatchlist();
+  }
   private async initializeWatchlist() {
     logger.info(`\n🔍 VALIDANDO WATCHLIST INICIAL...`);
     this.validWatchlist = [];
@@ -544,7 +546,42 @@ export class TradingBot {
         },
         btcContext,
       );
+      // ✅ Después — aplicar ajustes en código antes de devolver
+      let finalScore = score;
 
+      // Penalizaciones hard-coded — el código siempre tiene la última palabra
+      if (rsi > 72) {
+        finalScore -= 15;
+        logger.warn(
+          `   ⚠️  ${pair}: RSI sobrecompra (${rsi.toFixed(1)}) → -15 pts`,
+        );
+      }
+      if (rsi < 28) {
+        finalScore -= 10;
+        logger.warn(
+          `   ⚠️  ${pair}: RSI sobreventa extrema (${rsi.toFixed(1)}) → -10 pts`,
+        );
+      }
+
+      // Bonificaciones
+      if (rsi >= 45 && rsi <= 58) {
+        finalScore += 5;
+      }
+
+      // BTC context — penalizar si el mercado general cae fuerte
+      const btcChange = parseFloat(btcContext.btcChange24h);
+      if (btcChange < -3) {
+        finalScore -= 10;
+        logger.warn(
+          `   ⚠️  ${pair}: BTC cayendo ${btcChange.toFixed(1)}% → -10 pts`,
+        );
+      }
+      if (btcChange > 2) {
+        finalScore += 5;
+      }
+
+      // Clampar siempre entre 1 y 100
+      finalScore = Math.min(100, Math.max(1, finalScore));
       return {
         pair,
         finalScore: score,
