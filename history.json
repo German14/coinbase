@@ -83,6 +83,28 @@
   },
   {
     "date": "2026-05-03",
-    "totalValue": 18.3485829330015
+    "totalValue": 10.0021530081886
+  },
+  {
+    "id": "sell-1777770524510-0.683368698303487",
+    "type": "SELL",
+    "pair": "ETH-USDC",
+    "amount": 0.00000179,
+    "price": 2309.6,
+    "totalValue": 0.004134184,
+    "fee": 0,
+    "timestamp": "2026-05-03T01:08:44.510Z",
+    "reason": "LIMPIEZA DE POLVO CRIPTOGRÁFICO"
+  },
+  {
+    "id": "buy-1777771259706-0.2444291725652954",
+    "type": "BUY",
+    "pair": "ORCA-USDC",
+    "amount": 0.81,
+    "price": 2.1241,
+    "totalValue": 1.720521,
+    "fee": 0.054528816488599974,
+    "timestamp": "2026-05-03T01:20:59.706Z",
+    "reason": "Entrada en tendencia"
   }
 ]

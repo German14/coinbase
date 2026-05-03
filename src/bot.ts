@@ -499,7 +499,7 @@ export class TradingBot {
     return results;
   }
 
-  private async getSpecificAnalysis(pair: string, btcContext: any) {
+ private async getSpecificAnalysis(pair: string, btcContext: any) {
     try {
       // 1. Validación básica del par
       if (!pair || pair.includes("EUR") || pair.includes("USD-USDC")) {
@@ -518,8 +518,6 @@ export class TradingBot {
         return null;
       }
 
-      const btcContext = await this.getBitcoinContext();
-
       // 3. Obtener velas
       const candles = await this.exchange.getCandles(pair);
       if (!candles || !Array.isArray(candles) || candles.length === 0) {
@@ -527,76 +525,68 @@ export class TradingBot {
         return null;
       }
 
-      // 4. Análisis de datos
+      // 4. Análisis de datos técnicos
       const currentPrice = candles[candles.length - 1].close;
       const rsi = Indicators.calculateRSI(candles);
       const emaValue = Indicators.calculateEMA(candles, config.emaPeriod || 20);
       const macd = Indicators.calculateMACD(candles);
 
-      const trend =
-        currentPrice > emaValue ? "Tendencia Alcista" : "Tendencia Bajista";
+      const trend = currentPrice > emaValue ? "Tendencia Alcista" : "Tendencia Bajista";
 
+      // 5. Análisis de IA como base
       const score = await this.ai.analyzeWithGroq(
         pair,
-        {
-          rsi,
-          price: currentPrice,
-          trend,
-          macd,
-        },
+        { rsi, price: currentPrice, trend, macd },
         btcContext,
       );
-      // ✅ Después — aplicar ajustes en código antes de devolver
+
+      // 6. Aplicar ajustes manuales (Scoring Invertido)
       let finalScore = score;
 
-      // Penalizaciones hard-coded — el código siempre tiene la última palabra
+      // --- Lógica de RSI Invertida ---
       if (rsi > 72) {
-        finalScore -= 15;
-        logger.warn(
-          `   ⚠️  ${pair}: RSI sobrecompra (${rsi.toFixed(1)}) → -15 pts`,
-        );
-      }
-      if (rsi < 28) {
-        finalScore -= 10;
-        logger.warn(
-          `   ⚠️  ${pair}: RSI sobreventa extrema (${rsi.toFixed(1)}) → -10 pts`,
-        );
+        finalScore -= 20;
+        logger.warn(`   ⚠️  ${pair}: RSI sobrecompra (${rsi.toFixed(1)}) → -20 pts`);
+      } else if (rsi < 30) {
+        // SEGURIDAD: Solo premiar sobreventa si la tendencia no es puramente suicida
+        // Si el precio está MUY por debajo de la EMA, es un cuchillo cayendo.
+        const emaDist = ((currentPrice - emaValue) / emaValue) * 100;
+
+        if (emaDist < -10) {
+           finalScore -= 15; // Penalizamos si está en caída libre
+           logger.warn(`   🚨  ${pair}: Cuchillo cayendo (${emaDist.toFixed(1)}% bajo EMA) → -15 pts`);
+        } else {
+           finalScore += 25;
+           logger.info(`   💎  ${pair}: RSI sobreventa (${rsi.toFixed(1)}) → +25 pts`);
+        }
+      } else if (rsi >= 30 && rsi <= 45) {
+        finalScore += 10;
       }
 
-      // Bonificaciones
-      if (rsi >= 45 && rsi <= 58) {
-        finalScore += 5;
-      }
-
-      // BTC context — penalizar si el mercado general cae fuerte
+      // --- BTC Context ---
       const btcChange = parseFloat(btcContext.btcChange24h);
-      if (btcChange < -3) {
-        finalScore -= 10;
-        logger.warn(
-          `   ⚠️  ${pair}: BTC cayendo ${btcChange.toFixed(1)}% → -10 pts`,
-        );
+      if (btcChange < -4) {
+        finalScore -= 20; // Más agresivo con el pánico de BTC
+        logger.warn(`   🚨  ${pair}: Pánico en BTC → -20 pts`);
       }
-      if (btcChange > 2) {
-        finalScore += 5;
-      }
+      if (btcChange > 1.5) finalScore += 7;
 
-      // Clampar siempre entre 1 y 100
+      // Clampar entre 1 y 100
       finalScore = Math.min(100, Math.max(1, finalScore));
+
+      // ⚠️ CORRECCIÓN AQUÍ: Devolver finalScore, no score
       return {
         pair,
-        finalScore: score,
+        finalScore: finalScore, // Antes decía 'score', lo cual ignoraba tus ajustes
         price: currentPrice,
         trend,
         rsi,
         btcRef: btcContext.btcChange24h,
       };
     } catch (error: any) {
-      // Si algo falla dentro (como un error 400 de Coinbase),
-      // lo capturamos aquí para que el ciclo principal continúe
-      // logger.error(`Error analizando ${pair}: ${error.message}`);
       return null;
     }
-  }
+}
   async getBitcoinContext() {
     const btcCandles = await this.exchange.getCandles("BTC-USDC");
     const currentPrice = btcCandles[btcCandles.length - 1].close;
