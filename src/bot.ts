@@ -88,23 +88,15 @@ export class TradingBot {
       );
 
       if (this.currentHolding) {
-        // Verificar si la moneda actual está en el watchlist válido
-        await this.managePosition(analyses, btcContext); // ← pasar los análisis ya hechos
-
+        // 1. Primero validar que el par es legítimo
         const isValidHolding = this.validWatchlist.includes(
           this.currentHolding,
         );
-
         if (!isValidHolding) {
           logger.error(`\n🚨 PAR ILEGÍTIMO DETECTADO: ${this.currentHolding}`);
-          logger.error(
-            `   Este par no está en el watchlist válido o no existe en Coinbase`,
-          );
           logger.error(`   Vendiendo automáticamente para liberar capital...`);
-
           const symbol = this.currentHolding.split("-")[0];
           const balance = await this.exchange.getBalance(symbol);
-
           if (balance > 0) {
             try {
               const sellPrice = await this.exchange.getPrice(`${symbol}-USDC`);
@@ -121,10 +113,11 @@ export class TradingBot {
               logger.error(`❌ Error vendiendo ${symbol}: ${error.message}`);
             }
           }
-
           this.currentHolding = null;
-          return; // Salir del ciclo para que en el próximo pueda comprar algo válido
+          return;
         }
+        // Verificar si la moneda actual está en el watchlist válido
+        await this.managePosition(analyses, btcContext); // ← pasar los análisis ya hechos
 
         logger.warn(`\n🔄 MANEJO DE POSICIÓN ABIERTA`);
         logger.warn(`   Moneda actual: ${this.currentHolding}`);
@@ -301,7 +294,6 @@ export class TradingBot {
         logger.info(
           `\n⚠️  Posición pequeña detectada: ${mainHolding.pair} = $${valueInUsd.toFixed(2)}`,
         );
-
       } else {
         this.currentHolding = null;
       }
