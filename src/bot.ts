@@ -301,7 +301,7 @@ export class TradingBot {
         logger.info(
           `\n⚠️  Posición pequeña detectada: ${mainHolding.pair} = $${valueInUsd.toFixed(2)}`,
         );
-        this.currentHolding = null;
+
       } else {
         this.currentHolding = null;
       }
@@ -311,8 +311,13 @@ export class TradingBot {
   }
 
   async managePosition(allAnalyses: any[], btcContext: any): Promise<void> {
-    if (!this.currentHolding) return;
+    if (!this.currentHolding) {
+      logger.info("ℹ️ Sin posición abierta, saltando gestión.");
+      return;
+    }
+    const pairParts = (this.currentHolding || "").split("-");
 
+    if (pairParts.length < 2) return;
     try {
       const candles = await this.exchange.getCandles(this.currentHolding);
       // --- VALIDACIÓN ANTIFALLO ---
@@ -499,7 +504,7 @@ export class TradingBot {
     return results;
   }
 
- private async getSpecificAnalysis(pair: string, btcContext: any) {
+  private async getSpecificAnalysis(pair: string, btcContext: any) {
     try {
       // 1. Validación básica del par
       if (!pair || pair.includes("EUR") || pair.includes("USD-USDC")) {
@@ -531,7 +536,8 @@ export class TradingBot {
       const emaValue = Indicators.calculateEMA(candles, config.emaPeriod || 20);
       const macd = Indicators.calculateMACD(candles);
 
-      const trend = currentPrice > emaValue ? "Tendencia Alcista" : "Tendencia Bajista";
+      const trend =
+        currentPrice > emaValue ? "Tendencia Alcista" : "Tendencia Bajista";
 
       // 5. Análisis de IA como base
       const score = await this.ai.analyzeWithGroq(
@@ -546,18 +552,24 @@ export class TradingBot {
       // --- Lógica de RSI Invertida ---
       if (rsi > 72) {
         finalScore -= 20;
-        logger.warn(`   ⚠️  ${pair}: RSI sobrecompra (${rsi.toFixed(1)}) → -20 pts`);
+        logger.warn(
+          `   ⚠️  ${pair}: RSI sobrecompra (${rsi.toFixed(1)}) → -20 pts`,
+        );
       } else if (rsi < 30) {
         // SEGURIDAD: Solo premiar sobreventa si la tendencia no es puramente suicida
         // Si el precio está MUY por debajo de la EMA, es un cuchillo cayendo.
         const emaDist = ((currentPrice - emaValue) / emaValue) * 100;
 
         if (emaDist < -10) {
-           finalScore -= 15; // Penalizamos si está en caída libre
-           logger.warn(`   🚨  ${pair}: Cuchillo cayendo (${emaDist.toFixed(1)}% bajo EMA) → -15 pts`);
+          finalScore -= 15; // Penalizamos si está en caída libre
+          logger.warn(
+            `   🚨  ${pair}: Cuchillo cayendo (${emaDist.toFixed(1)}% bajo EMA) → -15 pts`,
+          );
         } else {
-           finalScore += 25;
-           logger.info(`   💎  ${pair}: RSI sobreventa (${rsi.toFixed(1)}) → +25 pts`);
+          finalScore += 25;
+          logger.info(
+            `   💎  ${pair}: RSI sobreventa (${rsi.toFixed(1)}) → +25 pts`,
+          );
         }
       } else if (rsi >= 30 && rsi <= 45) {
         finalScore += 10;
@@ -586,7 +598,7 @@ export class TradingBot {
     } catch (error: any) {
       return null;
     }
-}
+  }
   async getBitcoinContext() {
     const btcCandles = await this.exchange.getCandles("BTC-USDC");
     const currentPrice = btcCandles[btcCandles.length - 1].close;

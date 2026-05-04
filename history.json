@@ -83,7 +83,7 @@
   },
   {
     "date": "2026-05-03",
-    "totalValue": 10.0021530081886
+    "totalValue": 18.0898174443222
   },
   {
     "id": "sell-1777770524510-0.683368698303487",
@@ -105,6 +105,186 @@
     "totalValue": 1.720521,
     "fee": 0.054528816488599974,
     "timestamp": "2026-05-03T01:20:59.706Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777772704668-0.42817868209297405",
+    "type": "SELL",
+    "pair": "ORCA-USDC",
+    "amount": 0.81,
+    "price": 2.0976,
+    "totalValue": 1.6990560000000001,
+    "fee": 0.037379232000000005,
+    "timestamp": "2026-05-03T01:45:04.668Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "id": "buy-1777772970350-0.7978616478731613",
+    "type": "BUY",
+    "pair": "LINK-USDC",
+    "amount": 0.18,
+    "price": 9.103277777777778,
+    "totalValue": 1.63859,
+    "fee": 0.08898969648860011,
+    "timestamp": "2026-05-03T01:49:30.350Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777773991361-0.05109152053799404",
+    "type": "SELL",
+    "pair": "LINK-USDC",
+    "amount": 0.18,
+    "price": 9.097,
+    "totalValue": 1.63746,
+    "fee": 0.03602412,
+    "timestamp": "2026-05-03T02:06:31.361Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "id": "buy-1777774829326-0.733347538570879",
+    "type": "BUY",
+    "pair": "BTC-USDC",
+    "amount": 0.00002098,
+    "price": 78133.91,
+    "totalValue": 1.6392494318,
+    "fee": 0.06240161468860017,
+    "timestamp": "2026-05-03T02:20:29.326Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "buy-1777800995162-0.46603459811706727",
+    "type": "BUY",
+    "pair": "LINK-USDC",
+    "amount": 0.88,
+    "price": 9.124,
+    "totalValue": 8.02912,
+    "fee": 0.2619411783221999,
+    "timestamp": "2026-05-03T09:36:35.162Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777806333061-0.8501211071489474",
+    "type": "SELL",
+    "pair": "LINK-USDC",
+    "amount": 0.88,
+    "price": 9.122,
+    "totalValue": 8.02736,
+    "fee": 0.17660192000000002,
+    "timestamp": "2026-05-03T11:05:33.061Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "id": "buy-1777807230190-0.4109563866314796",
+    "type": "BUY",
+    "pair": "LINK-USDC",
+    "amount": 0.86,
+    "price": 9.133,
+    "totalValue": 7.854379999999999,
+    "fee": 0.31362417832220046,
+    "timestamp": "2026-05-03T11:20:30.190Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777914181986-0.15442857452288838",
+    "type": "SELL",
+    "pair": "LINK-USDC",
+    "amount": 0.86,
+    "price": 9.4169,
+    "totalValue": 8.098534,
+    "fee": 0.17816774800000004,
+    "timestamp": "2026-05-04T17:03:01.986Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "date": "2026-05-04",
+    "totalValue": 114.2706302498242
+  },
+  {
+    "id": "buy-1777914328263-0.3584212020581943",
+    "type": "BUY",
+    "pair": "ETH-USDC",
+    "amount": 0.00340974,
+    "price": 2360.36,
+    "totalValue": 8.048213906400001,
+    "fee": 0.2435292219221985,
+    "timestamp": "2026-05-04T17:05:28.263Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "buy-1777915997516-0.6504425342723257",
+    "type": "BUY",
+    "pair": "LINK-USDC",
+    "amount": 10.28,
+    "price": 9.455,
+    "totalValue": 97.19739999999999,
+    "fee": 2.9857676176242194,
+    "timestamp": "2026-05-04T17:33:17.516Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777924162260-0.18898235932649898",
+    "type": "SELL",
+    "pair": "LINK-USDC",
+    "amount": 10.28,
+    "price": 9.386,
+    "totalValue": 96.48807999999998,
+    "fee": 2.1227377599999997,
+    "timestamp": "2026-05-04T19:49:22.260Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "id": "buy-1777924163021-0.45937107606821326",
+    "type": "BUY",
+    "pair": "PEPE-USDC",
+    "amount": 545538,
+    "price": 0.00000402,
+    "totalValue": 2.1930627599999997,
+    "fee": 0.06372435762420015,
+    "timestamp": "2026-05-04T19:49:23.021Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777925961662-0.9575265045436689",
+    "type": "SELL",
+    "pair": "PEPE-USDC",
+    "amount": 545538,
+    "price": 0.00000401,
+    "totalValue": 2.1876073799999998,
+    "fee": 0.04812736236,
+    "timestamp": "2026-05-04T20:19:21.662Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "id": "buy-1777925962552-0.24459086346628678",
+    "type": "BUY",
+    "pair": "LINK-USDC",
+    "amount": 9.92,
+    "price": 9.364,
+    "totalValue": 92.89088000000001,
+    "fee": 2.910568720674192,
+    "timestamp": "2026-05-04T20:19:22.552Z",
+    "reason": "Entrada en tendencia"
+  },
+  {
+    "id": "sell-1777927760834-0.1341919771210307",
+    "type": "SELL",
+    "pair": "LINK-USDC",
+    "amount": 9.92,
+    "price": 9.332,
+    "totalValue": 92.57344,
+    "fee": 2.03661568,
+    "timestamp": "2026-05-04T20:49:20.834Z",
+    "reason": "Salida de posición"
+  },
+  {
+    "id": "buy-1777928717373-0.3266801749963091",
+    "type": "BUY",
+    "pair": "LINK-USDC",
+    "amount": 4.98,
+    "price": 9.364,
+    "totalValue": 46.632720000000006,
+    "fee": 49.5817547244242,
+    "timestamp": "2026-05-04T21:05:17.373Z",
     "reason": "Entrada en tendencia"
   }
 ]
