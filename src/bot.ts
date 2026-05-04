@@ -116,9 +116,6 @@ export class TradingBot {
           this.currentHolding = null;
           return;
         }
-        // Verificar si la moneda actual está en el watchlist válido
-        await this.managePosition(analyses, btcContext); // ← pasar los análisis ya hechos
-
         logger.warn(`\n🔄 MANEJO DE POSICIÓN ABIERTA`);
         logger.warn(`   Moneda actual: ${this.currentHolding}`);
         logger.warn(`   Precio de compra: $${this.buyPrice.toFixed(6)}`);

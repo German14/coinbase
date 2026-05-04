@@ -95,8 +95,8 @@ export class CoinbaseClient {
         parseFloat(a.available_balance.value) > 0 ||
         parseFloat(a.hold.value) > 0
       ) {
-        console.log(
-          `Moneda: ${a.currency} | Disponible: ${a.available_balance.value} | Retenido: ${a.hold.value} | Tipo: ${a.type}`,
+        logger.info(
+          `   💰 ${a.currency} | Disponible: ${a.available_balance.value} | Retenido: ${a.hold.value}`,
         );
       }
     });
@@ -176,19 +176,6 @@ export class CoinbaseClient {
     };
   }
   async getCandles(productId: string): Promise<any[]> {
-    // Primero validamos que el producto existe
-    try {
-      const productInfo = await this.getPrice(productId);
-      if (!productInfo || productInfo <= 0) {
-        console.warn(`⚠️  [CANDLES] Producto ${productId} no tiene precio válido`);
-        return [];
-      }
-    } catch (error: any) {
-      console.warn(`⚠️  [CANDLES] Producto ${productId} NO EXISTE o no está disponible: ${error.message}`);
-      return [];
-    }
-
-    // Pedimos 24 horas (86400 seg) para tener ~288 velas de 5 min
     const start = Math.floor(Date.now() / 1000) - 24 * 3600;
     const end = Math.floor(Date.now() / 1000);
     const path = `/api/v3/brokerage/products/${productId}/candles?start=${start}&end=${end}&granularity=FIVE_MINUTE`;
@@ -211,12 +198,16 @@ export class CoinbaseClient {
         .reverse();
 
       if (filtered.length === 0) {
-        console.warn(`⚠️  [CANDLES] ${productId}: Se obtuvieron ${data.candles.length} velas pero todas tienen precio 0`);
+        console.warn(
+          `⚠️  [CANDLES] ${productId}: Se obtuvieron ${data.candles.length} velas pero todas tienen precio 0`,
+        );
       }
 
       return filtered;
     } catch (error: any) {
-      console.warn(`⚠️  [CANDLES] Error obteniendo velas para ${productId}: ${error.message}`);
+      console.warn(
+        `⚠️  [CANDLES] Error obteniendo velas para ${productId}: ${error.message}`,
+      );
       return [];
     }
   }
