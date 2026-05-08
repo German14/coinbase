@@ -70,7 +70,7 @@ export class TransactionTracker {
         const trade = this.openTrades.get(tx.pair);
         if (trade) {
           trade.sellTransaction = tx;
-          
+
           const buyTx = trade.buyTransaction;
           const profitUSD = (tx.totalValue - tx.fee) - (buyTx.totalValue + buyTx.fee);
           const profitPercent = (profitUSD / (buyTx.totalValue + buyTx.fee)) * 100;
@@ -121,7 +121,7 @@ export class TransactionTracker {
   recordSell(pair: string, amount: number, price: number, fee: number = 0, reason: string = 'Manual'): void {
     const totalValue = amount * price;
     const transaction: Transaction = {
-      id: `sell-${Date.now()}-${Math.random()}`,
+      id: `sell-${Date.now()}-${Math.random().toString(36).substring(7)}`,
       type: 'SELL',
       pair,
       amount,
@@ -159,7 +159,7 @@ export class TransactionTracker {
     logger.info(`   Comisiones: $${fee.toFixed(2)}`);
     logger.info(`   Total Recibido: $${(totalValue - fee).toFixed(2)}`);
     logger.info(`   Razón: ${reason}`);
-    
+
     if (buyTx) {
       logger.info(`   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
       logger.info(`   📊 GANANCIA/PÉRDIDA:`);
@@ -184,8 +184,8 @@ export class TransactionTracker {
     const open = this.getOpenTrades();
 
     const totalProfit = closed.reduce((sum, t) => sum + (t.profitUSD || 0), 0);
-    const totalProfitPercent = closed.length > 0 
-      ? closed.reduce((sum, t) => sum + (t.profitPercent || 0), 0) / closed.length 
+    const totalProfitPercent = closed.length > 0
+      ? closed.reduce((sum, t) => sum + (t.profitPercent || 0), 0) / closed.length
       : 0;
 
     let currentValue = 0;
@@ -202,7 +202,7 @@ export class TransactionTracker {
     logger.info(`✅ Operaciones Cerradas: ${closed.length}`);
     logger.info(`📦 Posiciones Abiertas: ${open.length}`);
     logger.info(`💰 Ganancia Total: $${totalProfit.toFixed(2)} (${totalProfitPercent.toFixed(2)}% promedio)`);
-    
+
     if (open.length > 0) {
       logger.info(`\n📊 Posiciones Abiertas:`);
       for (const trade of open) {

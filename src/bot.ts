@@ -647,47 +647,38 @@ export class TradingBot {
     }
   }
 
-  private async executeSell() {
-    if (!this.currentHolding) return;
-    try {
-      const pair = this.currentHolding;
-      const symbol = pair.split("-")[0];
-      const amount = await this.exchange.getBalance(symbol);
-      // Truncar a 6 decimales para evitar errores de precisión en la API
-      const safeAmount = Math.floor(amount * 1000000) / 1000000;
+ private async executeSell() {
+  if (!this.currentHolding) return;
+  try {
+    const pair = this.currentHolding;
+    const symbol = pair.split("-")[0];
+    const amount = await this.exchange.getBalance(symbol);
 
-      if (safeAmount > 0) {
-        const sellPrice = await this.exchange.getPrice(pair);
+    // DETERMINAR PRECISIÓN SEGÚN MONEDA
+    // BTC/ETH aceptan 8, pero la mayoría de Alts (LINK, SOL, ADA) funcionan con 2 o 4
+    const precision = (symbol === 'BTC' || symbol === 'ETH') ? 8 : 2;
 
-        // Calcular valor esperado vs fees
-        const expectedValue = safeAmount * sellPrice;
-        const estimatedFees = expectedValue * (config.minProfitFees / 100);
+    // Forzamos el truncado y eliminamos decimales fantasma de JS
+    const safeAmount = parseFloat(amount.toFixed(precision));
 
-        logger.info(
-          `💸 VENTA: ${safeAmount.toFixed(8)} ${symbol} | Precio: $${sellPrice.toFixed(6)}`,
-        );
-        logger.info(
-          `   Valor esperado: $${expectedValue.toFixed(2)} | Fees estimados: $${estimatedFees.toFixed(2)}`,
-        );
+    if (safeAmount > 0) {
+      const sellPrice = await this.exchange.getPrice(pair);
+      const expectedValue = safeAmount * sellPrice;
+      const estimatedFees = expectedValue * (config.minProfitFees / 100);
 
-        await this.exchange.marketSell(pair, safeAmount);
-        logger.success(`💰 Venta de ${symbol} completada.`);
+      logger.info(`💸 VENTA: ${safeAmount} ${symbol} | Precio: $${sellPrice.toFixed(6)}`);
 
-        // Registrar en tracker con fees
-        this.tracker.recordSell(
-          pair,
-          safeAmount,
-          sellPrice,
-          estimatedFees,
-          "Salida de posición",
-        );
-        this.tracker.getSummary();
-        this.riskManager.closeTrade();
+      // IMPORTANTE: Pasamos el safeAmount ya limpio
+      await this.exchange.marketSell(pair, safeAmount);
 
-        this.currentHolding = null;
-      }
-    } catch (e: any) {
-      logger.error(`❌ Error en venta: ${e.message}`);
+      logger.success(`💰 Venta de ${symbol} completada.`);
+
+      this.tracker.recordSell(pair, safeAmount, sellPrice, estimatedFees, "Salida");
+      this.riskManager.closeTrade();
+      this.currentHolding = null;
     }
+  } catch (e: any) {
+    logger.error(`❌ Error en venta: ${e.message}`);
   }
+}
 }

@@ -49,6 +49,10 @@ export class BalanceManager {
 
   async printReport() {
     try {
+
+
+
+
       const rawBalances = await this.client.getBalances();
 
       let totalValue = 0;

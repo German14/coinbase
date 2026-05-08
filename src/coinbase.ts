@@ -135,13 +135,13 @@ export class CoinbaseClient {
   }
 
   async marketSell(productId: string, baseSize: number): Promise<OrderResult> {
-    const clientOrderId = `bot-sell-${Date.now()}`;
+    const clientOrderId = Math.random().toString(36).substring(7);
     const bodyMarket = {
       client_order_id: clientOrderId,
       product_id: productId,
       side: "SELL",
       order_configuration: {
-        market_market_ioc: { base_size: baseSize.toFixed(8) },
+        market_market_ioc: { base_size: baseSize.toString() },
       },
     };
 
